@@ -22,7 +22,7 @@ int main(int argc, char* argv[])
 {
 
     Config config("cfg.json");
-	Grayscale_Material gray_material(config.ResourceSetting.MaterialPath);
+    ActiveComposite active_compsite(config.ResourceSetting.MaterialPath);
 
     Eigen::MatrixXd V;
     Eigen::MatrixXi F;
