@@ -1,2 +1,2 @@
-# LightWeight-Geometry-Framework
-A basic framework for develop geometry processing work.
+# GrayScaleMorph
+A compuational framework for gray-scale printing
