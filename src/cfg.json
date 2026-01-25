@@ -1,0 +1,16 @@
+{
+	"Resource": {
+		"ResourcePath": [ "../../Resources/" ],
+		"MaterialPath": [ "../../Resources/materials/material.json" ]
+	},
+	"Model": {
+		"ModelName": [ "hemisphere" ],
+		"Postfix": [ ".obj" ],
+		"InputPath": [ "../../Resources/meshes/" ]
+	},
+	"OutputSettings": {
+		"OutputPath": [ "../outputs/" ],
+		"Mode": ["cover"]
+	}
+
+}
