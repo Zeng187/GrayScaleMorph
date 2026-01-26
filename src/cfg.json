@@ -4,13 +4,21 @@
 		"MaterialPath": [ "../../Resources/materials/material.json" ]
 	},
 	"Model": {
-		"ModelName": [ "hemisphere" ],
+		"ModelName": [ "mesh_seg_3" ],
 		"Postfix": [ ".obj" ],
-		"InputPath": [ "../../Resources/meshes/" ]
+		"InputPath": [ "../../Resources/meshes/test_seg/" ]
 	},
 	"OutputSettings": {
 		"OutputPath": [ "../outputs/" ],
-		"Mode": ["cover"]
+		"Mode": [ "cover" ]
+	},
+	"RuntimeSettings": {
+		"Platewidth": [ 80 ],
+		"MaxIter": [ 100 ],
+		"nFmin": [ 200 ],
+		"epsilon": [ 1e-6 ],
+		"wM": [ 0.01 ],
+		"wL": [ 0.01 ]
 	}
 
 }

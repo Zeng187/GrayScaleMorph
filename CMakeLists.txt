@@ -18,13 +18,33 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/deps/libigl-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/geometry-central-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/TinyAD-src" EXCLUDE_FROM_ALL)
 
-
+file(GLOB_RECURSE RSC_FILES
+    "${CMAKE_SOURCE_DIR}/src/*.json"
+)
 
 add_executable(
   ${ProjectName}
   src/main.cpp
+  src/common.hpp
   src/config.hpp
   src/config.cpp
+  src/material.hpp
+  src/material.cpp
+  src/timer.h
+  src/solvers.h
+  src/newton.h
+  src/newton.cpp
+  src/parameterization.h
+  src/parameterization.cpp
+  src/LocalGlobalSolver.h
+  src/LocalGlobalSolver.cpp
+  src/simulation_utils.h
+  src/simulation_utils.cpp
+  src/functions.h
+  src/functions.cpp
+  src/morphmesh.hpp
+  src/morphmesh.cpp
+  ${RSC_FILES}
 )
 
 target_link_libraries(

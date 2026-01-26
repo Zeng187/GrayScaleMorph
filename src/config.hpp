@@ -27,4 +27,13 @@ public:
         std::string OutputPath;
         std::string Mode;
     }OutputSetting;
+
+    struct {
+        int    Platewidth;
+        int    MaxIter;
+        int    nFmin;
+        double epsilon;
+        double wM;
+        double wL;
+    } RuntimeSetting;
 };

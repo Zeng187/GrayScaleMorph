@@ -18,15 +18,24 @@ Config::Config(const std::string& filePath) {
     json j;
     file >> j;
 
-    this->ResourceSetting.ResourcePath = j["Resource"]["ResourcePath"][0].get<std::string>();
-	this->ResourceSetting.MaterialPath = j["Resource"]["MaterialPath"][0].get<std::string>();
+    auto& r = j["Resource"];
+    ResourceSetting.ResourcePath = r["ResourcePath"][0];
+    ResourceSetting.MaterialPath = r["MaterialPath"][0];
 
-    this->ModelSetting.ModelName = j["Model"]["ModelName"][0].get<std::string>();
-    this->ModelSetting.Postfix = j["Model"]["Postfix"][0].get<std::string>();
-    this->ModelSetting.InputPath = j["Model"]["InputPath"][0].get<std::string>();
+    auto& m = j["Model"];
+    ModelSetting.ModelName = m["ModelName"][0];
+    ModelSetting.Postfix = m["Postfix"][0];
+    ModelSetting.InputPath = m["InputPath"][0];
 
-    this->OutputSetting.OutputPath = j["OutputSettings"]["OutputPath"][0].get<std::string>();
-    this->OutputSetting.Mode = j["OutputSettings"]["Mode"][0].get<std::string>();
+    auto& o = j["OutputSettings"];
+    OutputSetting.OutputPath = o["OutputPath"][0];
+    OutputSetting.Mode = o["Mode"][0];
 
-    spdlog::info("Configure file found in {0}", filePath);
+    auto& rt = j["RuntimeSettings"];
+    RuntimeSetting.Platewidth = rt["Platewidth"][0];
+    RuntimeSetting.MaxIter = rt["MaxIter"][0];
+    RuntimeSetting.nFmin = rt["nFmin"][0];
+    RuntimeSetting.epsilon = rt["epsilon"][0];
+    RuntimeSetting.wM = rt["wM"][0];
+    RuntimeSetting.wL = rt["wL"][0];
 }

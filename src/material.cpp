@@ -42,7 +42,7 @@ ActiveComposite::ActiveComposite(const std::string& filePath):Grayscale_Material
     double strain_min = *std::min_element(strech_ratio.begin(), strech_ratio.end());
     double strain_max = *std::max_element(strech_ratio.begin(), strech_ratio.end());
 
-    range_lam = double2{ strain_min,strain_max };
+    range_lam = double2{ 1 + strain_min,1 + strain_max };
 
     double _kappa_ = 1.5 * (strain_max - strain_min) / thickness;
 

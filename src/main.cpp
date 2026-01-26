@@ -6,7 +6,7 @@
 #include <igl/opengl/glfw/Viewer.h>   
 #include <igl/file_dialog_open.h>
 #include <igl/read_triangle_mesh.h>
-
+#include <igl/loop.h>
 #include <iostream>
 #include <fstream>  
 #include <vector>    
@@ -17,17 +17,20 @@
 
 #include"config.hpp"
 #include "material.hpp"
+#include "parameterization.h"
 
 int main(int argc, char* argv[])
 {
 
     Config config("cfg.json");
-    ActiveComposite active_compsite(config.ResourceSetting.MaterialPath);
+    ActiveComposite ac(config.ResourceSetting.MaterialPath);
 
     Eigen::MatrixXd V;
     Eigen::MatrixXi F;
 
     spdlog::info("program start:");
+
+	///***************************************** Load Mesh *****************************************///
 
     std::string input_mesh_path = config.ModelSetting.InputPath +  config.ModelSetting.ModelName + config.ModelSetting.Postfix;
     if (!igl::readOBJ(input_mesh_path, V, F)) {
@@ -39,8 +42,20 @@ int main(int argc, char* argv[])
     size_t nF = F.rows();
     spdlog::info("Read meshes with {0} vertices and {1} faces.",nV,nF);
 
+
+    while (nF < config.RuntimeSetting.nFmin)
+    {
+        Eigen::MatrixXd tempV = V;
+        Eigen::MatrixXi tempF = F;
+        igl::loop(tempV, tempF, V, F);
+        nV = V.rows();
+        nF = F.rows();
+    }
+
+    Eigen::MatrixXd P = parameterization(V, F, ac.range_lam.x, ac.range_lam.y, 0);
+
     igl::opengl::glfw::Viewer viewer;
-    viewer.data().set_mesh(V, F);
+    viewer.data().set_mesh(P, F);
     //viewer.data().set_colors(C);
     viewer.data().show_lines = true;
     viewer.launch();
