@@ -35,5 +35,7 @@ public:
         double epsilon;
         double wM;
         double wL;
+        double w_s;
+        double w_b;
     } RuntimeSetting;
 };

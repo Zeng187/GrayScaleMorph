@@ -4,6 +4,7 @@
 /obj/
 /deps/
 /include/
+/outputs/
 # Compiled object files
 *.o
 *.obj
@@ -23,4 +24,6 @@
 vscode/
 *.sln
 *.user
+# outputs
+*.vtk
 

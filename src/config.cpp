@@ -38,4 +38,6 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.epsilon = rt["epsilon"][0];
     RuntimeSetting.wM = rt["wM"][0];
     RuntimeSetting.wL = rt["wL"][0];
+    RuntimeSetting.w_s = rt["w_s"][0];
+    RuntimeSetting.w_b = rt["w_b"][0];
 }

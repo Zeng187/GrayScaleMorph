@@ -44,6 +44,11 @@ add_executable(
   src/functions.cpp
   src/morphmesh.hpp
   src/morphmesh.cpp
+  src/morph_functions.hpp
+  src/morph_functions.cpp
+  src/output.hpp
+  src/output.cpp
+  .gitignore
   ${RSC_FILES}
 )
 

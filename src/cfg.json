@@ -1,12 +1,12 @@
 {
 	"Resource": {
 		"ResourcePath": [ "../../Resources/" ],
-		"MaterialPath": [ "../../Resources/materials/material.json" ]
+		"MaterialPath": [ "../../Resources/materials/largedeform-material.json" ]
 	},
 	"Model": {
-		"ModelName": [ "mesh_seg_3" ],
+		"ModelName": [ "hemisphere" ],
 		"Postfix": [ ".obj" ],
-		"InputPath": [ "../../Resources/meshes/test_seg/" ]
+		"InputPath": [ "../../Resources/meshes/" ]
 	},
 	"OutputSettings": {
 		"OutputPath": [ "../outputs/" ],
@@ -18,7 +18,9 @@
 		"nFmin": [ 200 ],
 		"epsilon": [ 1e-6 ],
 		"wM": [ 0.01 ],
-		"wL": [ 0.01 ]
+		"wL": [ 0.01 ],
+		"w_s": [ 1 ],
+		"w_b": [ 1 ]
 	}
 
 }
