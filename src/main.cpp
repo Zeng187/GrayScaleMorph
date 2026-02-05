@@ -225,6 +225,10 @@ int main(int argc, char* argv[])
     VertexData<double> t_layer_pv_1_vd(mesh, morph_mesh.t_layer_pv_1);
     VertexData<double> t_layer_pv_2_vd(mesh, morph_mesh.t_layer_pv_2);
 
+    // t_layer_pv_1_vd.fill(1.0);
+    // t_layer_pv_2_vd.fill(0.0);
+    
+
     // Create adjoint function with material-based computation
     // This will optimize both vertex positions and t_layer_2 values
     auto adjointFunc_Lay1 = adjointFunctionWithMaterial_Lay1(geometry, F, MrInv,
