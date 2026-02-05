@@ -14,7 +14,7 @@
 	},
 	"RuntimeSettings": {
 		"Platewidth": [ 40 ],
-		"MaxIter": [ 100 ],
+		"MaxIter": [ 10 ],
 		"nFmin": [ 200 ],
 		"epsilon": [ 1e-6 ],
 		"wM": [ 0.01 ],

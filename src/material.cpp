@@ -182,4 +182,31 @@ ActiveComposite::ActiveComposite(const std::string& filePath):Grayscale_Material
 }
 
 
+void ActiveComposite::ComputeFeasibleVals()
+{
+    fesasible_cnt = count * count;
+    feasible_t_vals.resize(fesasible_cnt);
+    feasible_lamb.resize(fesasible_cnt);
+    feasible_kapp.resize(fesasible_cnt);
+    feasible_modl.resize(fesasible_cnt);
 
+    for(int j = 0; j<count;j++)
+    {
+        for(int i = 0;i<count; i++)
+        {
+            int id = j * count + i;
+            double t1 = (double) i /(double)(count -1);
+            double t2 = (double) j /(double)(count -1);
+
+            double lam = compute_lamb_d(m_strain_curve,t1,t2);
+            double kap = compute_curv_d(m_strain_curve,thickness,t1,t2);
+            double mol = compute_modu_d(m_moduls_curve,t1,t2);
+
+            feasible_t_vals[id]=std::pair<double,double>(t1,t2);
+            feasible_lamb[id] = lam;
+            feasible_kapp[id] = kap;
+            feasible_modl[id] = mol;
+        }
+    }
+
+}

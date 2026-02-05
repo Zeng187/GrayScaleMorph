@@ -31,7 +31,8 @@ public:
         Eigen::VectorXd& _lambda_pv,
         Eigen::VectorXd& _lambda_pf,
         Eigen::VectorXd& _kappa_pv ,
-        Eigen::VectorXd& _kappa_pf );
+        Eigen::VectorXd& _kappa_pf,
+        Eigen::VectorXd* vertex_area_sum_out = nullptr );
 
     static void SetMorphophing(
         const Eigen::VectorXd& _lambda_pv_t,
@@ -63,6 +64,14 @@ public:
         Eigen::VectorXd& _kappa_pv);
 
     static void RestrictRange(Eigen::VectorXd& _data, double range_m,double range_M);
+
+    // Reassign per-face values from per-vertex values (simple average)
+    static void ReassignPFFromPV(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+        const Eigen::MatrixXi& F,
+        const Eigen::VectorXd& _lambda_pv,
+        const Eigen::VectorXd& _kappa_pv,
+        Eigen::VectorXd& _lambda_pf,
+        Eigen::VectorXd& _kappa_pf);
 
 
 
@@ -119,6 +128,8 @@ public:
     Eigen::VectorXd kappa_pv_diff;
     Eigen::VectorXd kappa_pf_diff;
 
+    // Store vertex area sum for area-weighted averaging
+    Eigen::VectorXd vertex_area_sum;
 
     Eigen::VectorXd theta_v_s;
     Eigen::VectorXd theta_v_r;

@@ -120,6 +120,7 @@ class ActiveComposite: public Grayscale_Material
 public:
 	ActiveComposite(const std::string& filePath);
 
+	void ComputeFeasibleVals();
 
 	// std::vector<double> lambda;
 	// std::vector<double> kappa;
@@ -127,7 +128,11 @@ public:
 	double2 range_lam;
 	double2 range_kap;
 
-
+	int fesasible_cnt = 0;
+	std::vector<std::pair<double,double>> feasible_t_vals;
+	std::vector<double> feasible_lamb;
+	std::vector<double> feasible_kapp;
+	std::vector<double> feasible_modl;
 	// M_Poly_Curve m_lambda_curve;
 	// M_Poly_Curve m_kappa_curve;
 	// M_Poly_Curve m_moduls_curve;

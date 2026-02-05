@@ -40,6 +40,7 @@ int main(int argc, char* argv[])
     Config config("cfg.json");
     ActiveComposite ac(config.ResourceSetting.MaterialPath);
     ac.ComputeMaterialCurve();
+    ac.ComputeFeasibleVals();
 
     Eigen::MatrixXd V;
     Eigen::MatrixXi F;
@@ -114,7 +115,7 @@ int main(int argc, char* argv[])
     double nu = 0.5;
     Morphmesh morph_mesh(V, P, F, E, nu);
     Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF,boundary_vertex_flags,boundary_face_flags,boundary_ref_indices,
-        MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t);
+        MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t, &morph_mesh.vertex_area_sum);
     Morphmesh::SetMorphophing(morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
         morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t,
         morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
@@ -123,16 +124,7 @@ int main(int argc, char* argv[])
 	// Morphmesh::RestrictRange(morph_mesh.kappa_pv_s, ac.range_kap.x, ac.range_kap.y);
     // Morphmesh::RestrictRange(morph_mesh.lambda_pf_s, ac.range_lam.x, ac.range_lam.y);
     // Morphmesh::RestrictRange(morph_mesh.kappa_pf_s, ac.range_kap.x, ac.range_kap.y);
-
-    // Compute thickness layer values from lambda and kappa
-    // Inverts material curve to find t parameters that produce desired lambda/kappa
-    // Morphmesh::ComputeTLayersFromMorphophing(morph_mesh.lambda_pv_s,morph_mesh.kappa_pv_s,
-    //     ac.m_strain_curve,ac.m_moduls_curve,ac.thickness,
-    //     morph_mesh.t_layer_pv_1,morph_mesh.t_layer_pv_2);
-
-    // Morphmesh::ComputeMorphingFormTLayers(morph_mesh.t_layer_pv_1,morph_mesh.t_layer_pv_2,
-    //     ac.m_strain_curve,ac.m_moduls_curve,ac.thickness,
-    //     morph_mesh.lambda_pv_s,morph_mesh.kappa_pv_s);
+ 
 
     auto V_targ= V;
     V_targ *= 1.0 / scaleFactor;
@@ -179,11 +171,40 @@ int main(int argc, char* argv[])
     spdlog::info("Step 4: Inverse Design.");
 
 
-    auto adjointFunc = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+    int inner_iter = 5;
+    int k = 0;
+    while(k < inner_iter)
+    {
+        Vr = targetV;
+        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
 
-    Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc, fixedIdx, 
-        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
-        E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pv_s, kappa_pv_s, adjointFunc_OptLam, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+
+        // Copy optimized VertexData back to morph_mesh vectors
+        for (Vertex v : mesh.vertices())
+        {
+            int vert_id = v.getIndex();
+            morph_mesh.lambda_pv_s[vert_id] = lambda_pv_s[v];
+            morph_mesh.kappa_pv_s[vert_id] = kappa_pv_s[v];
+        }
+
+        // Reassign per-face values from optimized per-vertex values
+        Morphmesh::ReassignPFFromPV(geometry, F, morph_mesh.lambda_pv_s, morph_mesh.kappa_pv_s,
+            morph_mesh.lambda_pf_s, morph_mesh.kappa_pf_s);
+        lambda_pf_s = FaceData<double>(mesh, morph_mesh.lambda_pf_s);
+        kappa_pf_s = FaceData<double>(mesh, morph_mesh.kappa_pf_s);
+
+        k++;
+    }
+    
+
+
 
 
 

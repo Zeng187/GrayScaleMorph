@@ -339,7 +339,8 @@ void Morphmesh::ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryIn
     Eigen::VectorXd& _lambda_pv,
     Eigen::VectorXd& _lambda_pf,
     Eigen::VectorXd& _kappa_pv,
-    Eigen::VectorXd& _kappa_pf)
+    Eigen::VectorXd& _kappa_pf,
+    Eigen::VectorXd* vertex_area_sum_out)
 {
 
     using namespace Eigen;
@@ -421,20 +422,44 @@ void Morphmesh::ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryIn
         double kap = 0.5 * (a_mat.inverse() * b_mat).trace();
         _kappa_pf[face_id] = kap;
 
+        // Compute face area for area-weighted averaging
+        double face_area = 0.5 / MrInv_f.determinant();
+
         for (Vertex v : f.adjacentVertices())
         {
             int vert_id = v.getIndex();
-            _lambda_pv[vert_id] += lam;
-            _kappa_pv[vert_id] += kap;
+            _lambda_pv[vert_id] += lam * face_area;
+            _kappa_pv[vert_id] += kap * face_area;
         }
     }
 
+    // Compute total area at each vertex for area-weighted averaging
+    Eigen::VectorXd vertex_area_sum = Eigen::VectorXd::Zero(nV);
+    for (int face_id = 0; face_id < nF; ++face_id)
+    {
+        Face f = mesh.face(face_id);
+        Eigen::Matrix2d MrInv_f = MrInv[f];
+        double face_area = 0.5 / MrInv_f.determinant();
+
+        for (Vertex v : f.adjacentVertices())
+        {
+            int vert_id = v.getIndex();
+            vertex_area_sum[vert_id] += face_area;
+        }
+    }
+
+    // Normalize by total area at each vertex
     for (auto vert : mesh.vertices())
     {
-        int nv = vert.degree();
         int vert_id = vert.getIndex();
-        _kappa_pv[vert_id] /= nv;
-        _lambda_pv[vert_id] /= nv;
+        _kappa_pv[vert_id] /= vertex_area_sum[vert_id];
+        _lambda_pv[vert_id] /= vertex_area_sum[vert_id];
+    }
+
+    // Store vertex_area_sum if requested
+    if (vertex_area_sum_out != nullptr)
+    {
+        *vertex_area_sum_out = vertex_area_sum;
     }
 
 }
@@ -451,4 +476,29 @@ void Morphmesh::ComputeDiff()
     kappa_pf_diff = kappa_pf_r - kappa_pf_t;
     kappa_pv_diff = kappa_pv_r - kappa_pv_t;
 
+}
+
+void Morphmesh::ReassignPFFromPV(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+    const Eigen::MatrixXi& F,
+    const Eigen::VectorXd& _lambda_pv,
+    const Eigen::VectorXd& _kappa_pv,
+    Eigen::VectorXd& _lambda_pf,
+    Eigen::VectorXd& _kappa_pf)
+{
+    using namespace geometrycentral::surface;
+    SurfaceMesh& mesh = geometry.mesh;
+
+    for (Face f : mesh.faces())
+    {
+        int face_id = f.getIndex();
+
+        // Get the three vertex indices of this face
+        int x0_idx = f.halfedge().vertex().getIndex();
+        int x1_idx = f.halfedge().next().vertex().getIndex();
+        int x2_idx = f.halfedge().next().next().vertex().getIndex();
+
+        // Average the per-vertex values to get per-face values
+        _lambda_pf[face_id] = (_lambda_pv[x0_idx] + _lambda_pv[x1_idx] + _lambda_pv[x2_idx]) / 3.0;
+        _kappa_pf[face_id] = (_kappa_pv[x0_idx] + _kappa_pv[x1_idx] + _kappa_pv[x2_idx]) / 3.0;
+    }
 }
