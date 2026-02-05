@@ -8,6 +8,8 @@
 #include <TinyAD/ScalarFunction.hh>
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 
+// Forward declaration
+struct M_Poly_Curve;
 
 class Morphmesh
 {
@@ -17,30 +19,52 @@ public:
     Morphmesh(const Eigen::MatrixXd& V, const Eigen::MatrixXd& P, const Eigen::MatrixXi& F, double _E, double _nu);
     void init(const Eigen::MatrixXd& V, const Eigen::MatrixXd& P, const Eigen::MatrixXi& F);
 
-    void ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+    static void ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
         const Eigen::MatrixXd& V,
         const Eigen::MatrixXi& F,
+        const int &nV,
+        const int &nF,
         const std::vector<bool>& boundary_vertex_flags,
         const std::vector<bool>& boundary_face_flags,
         const std::vector<int>& boundary_ref_indices,
         const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
         Eigen::VectorXd& _lambda_pv,
         Eigen::VectorXd& _lambda_pf,
-        Eigen::VectorXd& _kappa_pv,
-        Eigen::VectorXd& _kappa_pf);
+        Eigen::VectorXd& _kappa_pv ,
+        Eigen::VectorXd& _kappa_pf );
 
-    // calculate the morphophing paramters: lamba, kappa, a_mat, b_mat settings
-    void ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-        const Eigen::MatrixXd& V,
-        const Eigen::MatrixXi& F,
-        const std::vector<bool>& boundary_vertex_flags,
-        const std::vector<bool>& boundary_face_flags,
-        const std::vector<int>& boundary_ref_indices,
-        const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-        Eigen::VectorXd& _lambda,
-        Eigen::VectorXd& _kappa,
-        Eigen::MatrixX3d& _a_comps,
-        Eigen::MatrixX3d& _b_comps);
+    static void SetMorphophing(
+        const Eigen::VectorXd& _lambda_pv_t,
+        const Eigen::VectorXd& _lambda_pf_t,
+        const Eigen::VectorXd& _kappa_pv_t,
+        const Eigen::VectorXd& _kappa_pf_t,
+        Eigen::VectorXd& _lambda_pv_s,
+        Eigen::VectorXd& _lambda_pf_s,
+        Eigen::VectorXd&  _kappa_pv_s,
+        Eigen::VectorXd&  _kappa_pf_s );
+
+
+    static void ComputeTLayersFromMorphophing(
+        const Eigen::VectorXd& _lambda_pv,
+        const Eigen::VectorXd& _kappa_pv,
+        const M_Poly_Curve& _strain_curve,
+        const M_Poly_Curve& _moduls_curve,
+        const double & thickness,
+        Eigen::VectorXd& t_layer_pv_1_,
+        Eigen::VectorXd& t_layer_pv_2_);
+
+    static void ComputeMorphingFormTLayers(
+        const Eigen::VectorXd& t_layer_pv_1_,
+        const Eigen::VectorXd& t_layer_pv_2_,
+        const M_Poly_Curve& _strain_curve,
+        const M_Poly_Curve& _moduls_curve,
+        const double & thickness,
+        Eigen::VectorXd& _lambda_pv,
+        Eigen::VectorXd& _kappa_pv);
+
+    static void RestrictRange(Eigen::VectorXd& _data, double range_m,double range_M);
+
+
 
     void ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
         const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
@@ -60,18 +84,12 @@ public:
         Eigen::VectorXd& Ws_density,
         Eigen::VectorXd& Wb_density);
 
-    void SetMorphophing(Eigen::VectorXd& _lambda_r,
-        Eigen::VectorXd& _kappa_r,
-        Eigen::MatrixX3d& _a_comps_r,
-        Eigen::MatrixX3d& _b_comps_r,
-        const Eigen::VectorXd& _lambda_s,
-        const Eigen::VectorXd& _kappa_s,
-        const Eigen::MatrixX3d& _a_comps_s,
-        const Eigen::MatrixX3d& _b_comps_s);
 
 
 
-    void ComputeElasticEnergyDensity();
+
+
+
     void ComputeDiff();
 
     // stretching anc cuEigen::MatrixX3d& _b_comps_r,rvature settings for initial setting(_s), simulation results(_r), target_surface(_t), actual(_a, by libigl and area check)
@@ -91,6 +109,10 @@ public:
     Eigen::VectorXd kappa_pf_t;
 
 
+    Eigen::VectorXd t_layer_pv_1;
+    Eigen::VectorXd t_layer_pv_2;
+    Eigen::VectorXd t_layer_pf_1;
+    Eigen::VectorXd t_layer_pf_2;
 
     Eigen::VectorXd lambda_pv_diff;
     Eigen::VectorXd lambda_pf_diff;
@@ -123,3 +145,6 @@ public:
     double nu = 0.5;
 
 };
+
+
+

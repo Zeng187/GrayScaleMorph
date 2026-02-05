@@ -2,8 +2,94 @@
 
 #include <string>
 #include <vector>
+#include <cmath>
 #include "common.hpp"
-//#include <Eigen/core>
+
+
+struct M_Poly_Curve
+{
+	std::vector<double> coeffs;
+	int order = 0;
+};
+
+template <typename T>
+inline T eval_poly(const M_Poly_Curve& _curve, T x) {
+	T res = T(0);
+	for (int i = _curve.order - 1; i >= 0; i--) {
+		res = res * x + T(_curve.coeffs[i]);
+	}
+	return res;
+}
+
+template <typename T>
+inline T compute_lamb_s(const M_Poly_Curve& _curve, T t) {
+	return 1 + eval_poly(_curve, t);
+}
+
+template <typename T>
+inline T compute_lamb_d(const M_Poly_Curve& _curve, T t1, T t2) {
+	T val_1 = eval_poly(_curve, t1);
+	T val_2 = eval_poly(_curve, t2);
+	return 1 + T(0.5) * (val_1 + val_2);
+}
+
+template <typename T>
+inline T compute_modu_s(const M_Poly_Curve& _curve, T t) {
+	return eval_poly(_curve, t);
+}
+
+template <typename T>
+inline T compute_modu_d(const M_Poly_Curve& _curve, T t1, T t2) {
+	T val_1 = eval_poly(_curve, t1);
+	T val_2 = eval_poly(_curve, t2);
+	return T(0.5) * (val_1 + val_2);
+}
+
+template <typename T>
+inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2) {
+	T val_1 = eval_poly(_curve, t1);
+	T val_2 = eval_poly(_curve, t2);
+	return T(1.5) * (val_1 - val_2) / T(thickness);
+}
+
+// Invert polynomial curve: given strain value, find t parameter using bisection
+inline double invert_poly(const M_Poly_Curve& _curve, double target_strain, double t_min = 0.0, double t_max = 1.0, double tol = 1e-6, int max_iter = 100) {
+	// Use bisection method to find t such that eval_poly(curve, t) = target_strain
+	double a = t_min;
+	double b = t_max;
+	double fa = eval_poly(_curve, a) - target_strain;
+	double fb = eval_poly(_curve, b) - target_strain;
+
+	// If target is outside the range, clamp to boundaries
+	if (fa * fb > 0) {
+		// Same sign, target might be outside range
+		if (std::abs(fa) < std::abs(fb)) {
+			return a;
+		} else {
+			return b;
+		}
+	}
+
+	// Bisection
+	for (int i = 0; i < max_iter; ++i) {
+		double c = (a + b) / 2.0;
+		double fc = eval_poly(_curve, c) - target_strain;
+
+		if (std::abs(fc) < tol || (b - a) / 2.0 < tol) {
+			return c;
+		}
+
+		if (fa * fc < 0) {
+			b = c;
+			fb = fc;
+		} else {
+			a = c;
+			fa = fc;
+		}
+	}
+
+	return (a + b) / 2.0;
+}
 
 class Grayscale_Material
 {
@@ -11,14 +97,21 @@ public:
 	Grayscale_Material(const std::string& filePath);
 	~Grayscale_Material(){};
 
+	void ComputeMaterialCurve();
+
 	std::string name="";
 	std::string description = "";
 	
+	std::vector<double> t_vals;
 	std::vector<double> youngs_modulus;
 	std::vector<double> strech_ratio;
 	int count =0;
 
 	double thickness = 1.0;
+
+
+	M_Poly_Curve m_strain_curve;
+	M_Poly_Curve m_moduls_curve;
 
 };
 
@@ -27,11 +120,18 @@ class ActiveComposite: public Grayscale_Material
 public:
 	ActiveComposite(const std::string& filePath);
 
-	std::vector<double> lambda;
-	std::vector<double> kappa;
-	std::vector<double> E_moduls;
+
+	// std::vector<double> lambda;
+	// std::vector<double> kappa;
+	// std::vector<double> E_moduls;
 	double2 range_lam;
 	double2 range_kap;
 
 
+	// M_Poly_Curve m_lambda_curve;
+	// M_Poly_Curve m_kappa_curve;
+	// M_Poly_Curve m_moduls_curve;
+
+
 };
+

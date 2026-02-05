@@ -9,31 +9,6 @@
 
 TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
 simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-                                                             const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-                                                             const geometrycentral::surface::FaceData<double>& lambda,
-                                                             const geometrycentral::surface::VertexData<double>& kappa,
-                                                             double E,
-                                                             double nu,
-                                                             double h,
-                                                             double w_s,
-                                                             double w_b);
-
-TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
-    simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-                   const geometrycentral::surface::VertexData<bool>& is_boundary_vertex,
-                   const geometrycentral::surface::FaceData<bool>& is_boundary_face,
-                   const geometrycentral::surface::FaceData<int>& boundary_ref_index,
-                       const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-                       const geometrycentral::surface::FaceData<double>& lambda,
-                       const geometrycentral::surface::FaceData<double>& kappa,
-                       double E,
-                       double nu,
-                       double h,
-                       double w_s,
-                       double w_b);
-
-TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
-simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
                    const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
                    const geometrycentral::surface::VertexData<double>& lambda,
                    const geometrycentral::surface::VertexData<double>& kappa,
@@ -43,37 +18,62 @@ simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometr
                    double w_s,
                    double w_b);
 
-TinyAD::ScalarFunction<1, double, Eigen::Index>
-    adjointFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-                    const Eigen::MatrixXi& F,
-                    const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-                    const geometrycentral::surface::FaceData<double>& lambda,
-                    double E,
-                    double nu,
-                    double h,
-                    double w_s,
-                    double w_b);
+// Forward declaration for material curve
+struct M_Poly_Curve;
 
-                    TinyAD::ScalarFunction<1, double, Eigen::Index>
+// Simulation function with material-based lambda/kappa computation
+// Computes lambda and kappa from t_layer_1, t_layer_2 vertex data using material curves
+TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
+simulationFunctionWithMaterial(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+                               const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+                               const geometrycentral::surface::VertexData<double>& t_layer_1,
+                               const geometrycentral::surface::VertexData<double>& t_layer_2,
+                               const M_Poly_Curve& strain_curve,
+                               const M_Poly_Curve& moduls_curve,
+                               double E,
+                               double nu,
+                               double h,
+                               double w_s,
+                               double w_b);
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
                 const Eigen::MatrixXi& F,
                 const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-                const geometrycentral::surface::VertexData<double>& kappa,
+                const geometrycentral::surface::VertexData<double>& t_layer_1,
                 double E,
                 double nu,
                 double h,
                 double w_s,
                 double w_b);
 
+// Adjoint function with material-based lambda/kappa computation
+// t_layer_1 is fixed, t_layer_2 is variable (optimized)
+// Variables: [3*nV vertex positions, nV t_layer_2 values]
 TinyAD::ScalarFunction<1, double, Eigen::Index>
-adjointFunction(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-                const Eigen::MatrixXi& F,
-                const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-                double E,
-                double nu,
-                double h,
-                double w_s,
-                double w_b);
+adjointFunctionWithMaterial_Lay1(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+                            const Eigen::MatrixXi& F,
+                            const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+                            const geometrycentral::surface::VertexData<double>& t_layer_1,
+                            const M_Poly_Curve& lambda_curve,
+                            const M_Poly_Curve& kappa_curve,
+                            double E,
+                            double nu,
+                            double h,
+                            double w_s,
+                            double w_b);
 
 
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunctionWithMaterial_Lay2(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+                            const Eigen::MatrixXi& F,
+                            const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+                            const geometrycentral::surface::VertexData<double>& t_layer_2,
+                            const M_Poly_Curve& lambda_curve,
+                            const M_Poly_Curve& kappa_curve,
+                            double E,
+                            double nu,
+                            double h,
+                            double w_s,
+                            double w_b);
 

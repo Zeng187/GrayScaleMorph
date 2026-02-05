@@ -75,4 +75,5 @@ set_target_properties(${ProjectName} PROPERTIES
 )
 if (MSVC)
     target_compile_options(${ProjectName} PRIVATE /utf-8)
+    set_target_properties(${ProjectName} PROPERTIES LINK_FLAGS "/STACK:10485760")
 endif()
