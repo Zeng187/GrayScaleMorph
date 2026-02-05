@@ -32,9 +32,27 @@ void newton(
     const std::vector<int>& fixedIdx = {},
     const std::function<void(const Eigen::VectorXd&)>& callBack = [](const auto&) {});
 
+Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXd& targetV,
+const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+geometrycentral::surface::FaceData<double>& theta1,
+geometrycentral::surface::VertexData<double>& theta2,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM,
+double wL,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
-Eigen::MatrixXd sparse_gauss_newton_lay1(
+Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(
 geometrycentral::surface::IntrinsicGeometryInterface& geometry,
 const Eigen::MatrixXd& targetV,
 const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
@@ -52,6 +70,7 @@ double h,
 double w_s,
 double w_b,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+
 
 Eigen::MatrixXd sparse_gauss_newton_lay1(
 geometrycentral::surface::IntrinsicGeometryInterface& geometry,

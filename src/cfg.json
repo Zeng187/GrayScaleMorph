@@ -13,12 +13,12 @@
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {
-		"Platewidth": [ 80 ],
+		"Platewidth": [ 40 ],
 		"MaxIter": [ 100 ],
 		"nFmin": [ 200 ],
 		"epsilon": [ 1e-6 ],
-		"wM": [ 0.00 ],
-		"wL": [ 0.00 ],
+		"wM": [ 0.01 ],
+		"wL": [ 0.01 ],
 		"w_s": [ 1 ],
 		"w_b": [ 1 ]
 	}

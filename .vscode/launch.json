@@ -11,7 +11,7 @@
             "cwd": "${workspaceFolder}/src",
             "environment": [],
             "console": "integratedTerminal",
-            "preLaunchTask": "CMake: Build"
+            // "preLaunchTask": "CMake: Build"
         },
         {
             "name": "Release GrayScaleMorph",
@@ -23,7 +23,7 @@
             "cwd": "${workspaceFolder}/src",
             "environment": [],
             "console": "integratedTerminal",
-            "preLaunchTask": "CMake: Build Release"
+            // "preLaunchTask": "CMake: Build Release"
         }
     ]
 }

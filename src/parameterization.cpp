@@ -160,9 +160,9 @@ Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
   // center and rotate vertex positions P to be aligned with V
   //centerAndRotate(V, P);
 
-  double s = (lambda1 + lambda2) * 0.5;
-  P.col(0) /= s;
-  P.col(1) /= s;
+  // double s = (lambda1 + lambda2) * 0.5;
+  // P.col(0) /= s;
+  // P.col(1) /= s;
 
   // restore F with holes
   F.conservativeResize(nF, 3);
