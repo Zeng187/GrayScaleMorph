@@ -38,6 +38,14 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.epsilon = rt["epsilon"][0];
     RuntimeSetting.wM = rt["wM"][0];
     RuntimeSetting.wL = rt["wL"][0];
+    RuntimeSetting.wM_kap = rt["wM_kap"][0];
+    RuntimeSetting.wL_kap = rt["wL_kap"][0];
+    RuntimeSetting.wM_lam = rt["wM_lam"][0];
+    RuntimeSetting.wL_lam = rt["wL_lam"][0];
     RuntimeSetting.w_s = rt["w_s"][0];
     RuntimeSetting.w_b = rt["w_b"][0];
+    RuntimeSetting.wP_kap = rt["wP_kap"][0];
+    RuntimeSetting.wP_lam = rt["wP_lam"][0];
+    RuntimeSetting.penalty_threshold = rt["penalty_threshold"][0];
+    RuntimeSetting.betaP = rt["betaP"][0];
 }

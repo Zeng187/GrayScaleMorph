@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include "common.hpp"
+#include<Eigen/core>
 
 
 struct M_Poly_Curve
@@ -50,6 +51,50 @@ inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2
 	T val_1 = eval_poly(_curve, t1);
 	T val_2 = eval_poly(_curve, t2);
 	return T(1.5) * (val_1 - val_2) / T(thickness);
+}
+
+// Compute the absolute difference between t and its closest value in feas_vals
+inline double compute_candidate_diff(const std::vector<double> &feas_vals, double t)
+{
+	if (feas_vals.empty()) {
+		return 0.0;
+	}
+
+	double min_diff = std::abs(t - feas_vals[0]);
+	for (size_t i = 1; i < feas_vals.size(); ++i) {
+		double diff = std::abs(t - feas_vals[i]);
+		if (diff < min_diff) {
+			min_diff = diff;
+		}
+	}
+
+	return min_diff;
+}
+
+// Compute the maximal or average distance from vals to closest points in feas_vals
+// Returns the maximum difference by default
+inline double compute_candidate_diff(const std::vector<double> &feas_vals, const Eigen::VectorXd& vals, bool use_max = true)
+{
+	if (vals.size() == 0 || feas_vals.empty()) {
+		return 0.0;
+	}
+
+	double total_diff = 0.0;
+	double max_diff = 0.0;
+
+	for (int i = 0; i < vals.size(); ++i) {
+		double diff = compute_candidate_diff(feas_vals, vals[i]);
+		total_diff += diff;
+		if (diff > max_diff) {
+			max_diff = diff;
+		}
+	}
+
+	if (use_max) {
+		return max_diff;
+	} else {
+		return total_diff / vals.size();
+	}
 }
 
 // Invert polynomial curve: given strain value, find t parameter using bisection
