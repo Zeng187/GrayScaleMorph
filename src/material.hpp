@@ -53,6 +53,33 @@ inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2
 	return T(1.5) * (val_1 - val_2) / T(thickness);
 }
 
+// Find the index of the nearest feasible (kap, lam) pair to (kap, lam) jointly
+inline int find_feasible_idx(const std::vector<double>& feas_kap,
+                              const std::vector<double>& feas_lam,
+                              double kap, double lam)
+{
+    int best_i = 0;
+    double best_d = std::pow(kap - feas_kap[0], 2) + std::pow(lam - feas_lam[0], 2);
+    for (size_t i = 1; i < feas_kap.size(); ++i) {
+        double d = std::pow(kap - feas_kap[i], 2) + std::pow(lam - feas_lam[i], 2);
+        if (d < best_d) { best_d = d; best_i = static_cast<int>(i); }
+    }
+    return best_i;
+}
+
+// Find the nearest feasible value to t in feas_vals
+inline double project_to_feasible(const std::vector<double>& feas_vals, double t)
+{
+    if (feas_vals.empty()) return t;
+    double best = feas_vals[0];
+    double best_d = std::abs(t - best);
+    for (size_t i = 1; i < feas_vals.size(); ++i) {
+        double d = std::abs(t - feas_vals[i]);
+        if (d < best_d) { best_d = d; best = feas_vals[i]; }
+    }
+    return best;
+}
+
 // Compute the absolute difference between t and its closest value in feas_vals
 inline double compute_candidate_diff(const std::vector<double> &feas_vals, double t)
 {
