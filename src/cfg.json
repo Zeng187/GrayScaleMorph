@@ -9,7 +9,7 @@
 		"InputPath": [ "../../Resources/meshes/" ]
 	},
 	"OutputSettings": {
-		"OutputPath": [ "../outputs/" ],
+		"OutputPath": [ "../../Resources/samples/" ],
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {
