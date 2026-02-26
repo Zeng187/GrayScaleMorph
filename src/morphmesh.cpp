@@ -256,9 +256,9 @@ void Morphmesh::ComputeTLayersFromMorphophing(
 
 {
     const double eps = 1e-6; // Keep away from boundaries to avoid numerical issues
-    int nV = _lambda_pv.size();
+    int N = _lambda_pv.size();
 
-    for (int i = 0; i < nV; ++i)
+    for (int i = 0; i < N; ++i)
     {
         double lambda = _lambda_pv[i];
         double kappa = _kappa_pv[i];
@@ -271,9 +271,11 @@ void Morphmesh::ComputeTLayersFromMorphophing(
         double t1 = invert_poly(_strain_curve, s1);
         double t2 = invert_poly(_strain_curve, s2);
 
+        t_layer_pv_1_[i] = t1;
+        t_layer_pv_2_[i] = t2;
         // Clamp to valid range [eps, 1-eps] to avoid boundary issues
-        t_layer_pv_1_[i] = std::max(eps, std::min(1.0 - eps, t1));
-        t_layer_pv_2_[i] = std::max(eps, std::min(1.0 - eps, t2));
+        // t_layer_pv_1_[i] = std::max(eps, std::min(1.0 - eps, t1));
+        // t_layer_pv_2_[i] = std::max(eps, std::min(1.0 - eps, t2));
     }
 
 }
