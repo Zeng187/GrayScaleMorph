@@ -1,7 +1,7 @@
 {
 	"Resource": {
 		"ResourcePath": [ "../../Resources/" ],
-		"MaterialPath": [ "../../Resources/materials/largedeform-material.json" ]
+		"MaterialPath": [ "../../Resources/materials/grayscale-material.json" ]
 	},
 	"Model": {
 		"ModelName": [ "hemisphere" ],
@@ -9,7 +9,7 @@
 		"InputPath": [ "../../Resources/meshes/" ]
 	},
 	"OutputSettings": {
-		"OutputPath": [ "../../Resources/samples/" ],
+		"OutputPath": [ "../outputs/" ],
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {

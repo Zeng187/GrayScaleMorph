@@ -107,10 +107,7 @@ int main(int argc, char* argv[])
     FaceData<Eigen::Matrix2d> MrInv = precomputeMrInv(mesh, P, F);
 
     std::vector<int> fixedVertexIdx = findCenterVertexIndices(P, F);
-    std::vector<int> fixedVertexIdx_x = {};
-    std::vector<int> fixedVertexIdx_y = {};
-    std::vector<int> fixedVertexIdx_z = {};
-    std::vector<int> fixedIdx;
+    std::vector<int> fixedIdx = findCenterFaceIndices(P, F);  // 9 DOF indices: {3*v, 3*v+1, 3*v+2} for each of 3 center face vertices
 
     double E = 1.0;
     double nu = 0.5;
