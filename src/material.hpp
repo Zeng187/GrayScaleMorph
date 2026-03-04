@@ -4,7 +4,7 @@
 #include <vector>
 #include <cmath>
 #include "common.hpp"
-#include<Eigen/core>
+#include <Eigen/Core>
 
 
 struct M_Poly_Curve

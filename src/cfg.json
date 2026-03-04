@@ -1,7 +1,7 @@
 {
 	"Resource": {
 		"ResourcePath": [ "../../Resources/" ],
-		"MaterialPath": [ "../../Resources/materials/largedeform-material.json" ]
+		"MaterialPath": [ "../../Resources/materials/grayscale-material.json" ]
 	},
 	"Model": {
 		"ModelName": [ "hemisphere" ],
@@ -9,17 +9,17 @@
 		"InputPath": [ "../../Resources/meshes/" ]
 	},
 	"OutputSettings": {
-		"OutputPath": [ "../../Resources/samples/" ],
+		"OutputPath": [ "../outputs/" ],
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {
 		"Platewidth": [ 40 ],
-		"MaxIter": [ 20 ],
-		"nFmin": [ 200 ],
+		"MaxIter": [ 50 ],
+		"nFmin": [ 500 ],
 		"epsilon": [ 1e-6 ],
 		"wM": [ 0.01 ],
 		"wL": [ 0.01 ],
-		"wM_kap": [ 0.1 ],
+		"wM_kap": [ 0.01 ],
 		"wL_kap": [ 0.1 ],
 		"wM_lam": [ 0.00 ],
 		"wL_lam": [ 0.1 ],

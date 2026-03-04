@@ -6,6 +6,75 @@
 #include <igl/slice_into.h>
 #include<igl/boundary_loop.h>
 
+Eigen::SparseMatrix<double> buildFlatCotanLaplacian(
+    geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+    const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv)
+{
+  using namespace geometrycentral::surface;
+  geometry.requireVertexIndices();
+  SurfaceMesh& mesh = geometry.mesh;
+  const size_t nV = mesh.nVertices();
+
+  std::vector<Eigen::Triplet<double>> trips;
+  trips.reserve(mesh.nFaces() * 6 + nV);
+  std::vector<double> diag(nV, 0.0);
+
+  for(Face f : mesh.faces())
+  {
+    // Reconstruct flat reference edge matrix: M_r = MrInv[f]^{-1}
+    Eigen::Matrix2d Mr = MrInv[f].inverse();
+    Eigen::Vector2d e01 = Mr.col(0); // v1 - v0 in flat domain
+    Eigen::Vector2d e02 = Mr.col(1); // v2 - v0 in flat domain
+
+    double det = std::abs(e01.x() * e02.y() - e01.y() * e02.x());
+    if(det < 1e-16) continue; // skip degenerate face
+
+    double e01_dot_e02 = e01.dot(e02);
+    double e01_sq = e01.squaredNorm();
+    double e02_sq = e02.squaredNorm();
+
+    // Cotan weights (0.5 * cotangent of opposite angle):
+    // Edge (v0, v1): opposite v2, cot(v2) = (|e02|^2 - e01·e02) / det
+    double w01 = 0.5 * (e02_sq - e01_dot_e02) / det;
+    // Edge (v0, v2): opposite v1, cot(v1) = (|e01|^2 - e01·e02) / det
+    double w02 = 0.5 * (e01_sq - e01_dot_e02) / det;
+    // Edge (v1, v2): opposite v0, cot(v0) = e01·e02 / det
+    double w12 = 0.5 * e01_dot_e02 / det;
+
+    // Get vertex indices from halfedge traversal (consistent with MrInv construction)
+    Halfedge he = f.halfedge();
+    size_t i0 = geometry.vertexIndices[he.vertex()];
+    size_t i1 = geometry.vertexIndices[he.next().vertex()];
+    size_t i2 = geometry.vertexIndices[he.next().next().vertex()];
+
+    // Edge (v0, v1): weight w01
+    trips.emplace_back((int)i0, (int)i1, -w01);
+    trips.emplace_back((int)i1, (int)i0, -w01);
+    diag[i0] += w01;
+    diag[i1] += w01;
+
+    // Edge (v0, v2): weight w02
+    trips.emplace_back((int)i0, (int)i2, -w02);
+    trips.emplace_back((int)i2, (int)i0, -w02);
+    diag[i0] += w02;
+    diag[i2] += w02;
+
+    // Edge (v1, v2): weight w12
+    trips.emplace_back((int)i1, (int)i2, -w12);
+    trips.emplace_back((int)i2, (int)i1, -w12);
+    diag[i1] += w12;
+    diag[i2] += w12;
+  }
+
+  for(size_t i = 0; i < nV; ++i)
+    trips.emplace_back((int)i, (int)i, diag[i]);
+
+  Eigen::SparseMatrix<double> L(nV, nV);
+  L.setFromTriplets(trips.begin(), trips.end());
+  return L;
+}
+
+
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size)
 {
   using namespace Eigen;

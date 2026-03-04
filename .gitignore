@@ -29,3 +29,8 @@ vscode/
 
 .claude/
 resources/
+help/
+CLAUDE.md
+PLAN.md
+papers/
+tests/

@@ -61,18 +61,19 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                          double dA = 0.5 / MrInv[f].determinant();
 
                          // Compute deformation gradient
-                         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
+                         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
-                         Eigen::Matrix<T, 2, 2> a = F.transpose() * F;
+                         Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
 
                          T lam = T(lambda[f]);
-                         Eigen::Matrix<T, 2, 2> a_bar_inv = T(1.0 / (lam * lam)) * Eigen::Matrix<T, 2, 2>::Identity();
 
-                         Eigen::Matrix<T, 2, 2> Egreen = ((a_bar_inv * a) - Eigen::Matrix<T, 2, 2>::Identity());
-
+                         T lam_sqr = lam * lam;
+                         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
                          T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         Ws = Ws * (1.0 / lam_sqr);
+
                          return T(w_s) * Ws * dA;
                        });
 
@@ -122,18 +123,14 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         }
         L /= n.squaredNorm();
 
-
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d ::Identity();
-
-        Eigen::Matrix2<T> E = (1.0 / (lam * lam)) * (((Ff.transpose() * L * Ff)) - (1.0 / (lam * lam)) * b_bar);
-        //Eigen::Matrix2<T> E = (((Ff.transpose() * L * Ff)) - b_bar);
-
-        //std::cout << F.transpose() * L * F << '\n';
-
-
-        T trM = E.trace();
-        T trM2 = (E * E).trace();
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        Wb = Wb * (1.0 / lam_sqr);
+
         return T(w_b) * Wb * dA; });
 
   return func;
@@ -171,21 +168,19 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                          double dA = 0.5 / MrInv[f].determinant();
 
                          // Compute deformation gradient
-                         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
+                         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
-                         // 第一基本型 a = F^T F
-                         Eigen::Matrix<T, 2, 2> a = F.transpose() * F;
+                         Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
 
-                         // 本征度量 a_bar = (lambda^2) I
                          T lam = T(lambda[f]);
-                         Eigen::Matrix<T, 2, 2> a_bar_inv = T(1.0 / (lam * lam)) * Eigen::Matrix<T, 2, 2>::Identity();
 
-                         // Green 应变 E = 0.5*(a_bar^{-1} a - I)
-                         Eigen::Matrix<T, 2, 2> Egreen = ((a_bar_inv * a) - Eigen::Matrix<T, 2, 2>::Identity());
-
+                         T lam_sqr = lam * lam;
+                         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
                          T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         Ws = Ws * (1.0 / lam_sqr);
+
                          return T(w_s) * Ws * dA;
                        });
 
@@ -237,19 +232,14 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         }
         L /= n.squaredNorm();
 
-
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d ::Identity();
-
-        // 本征度量 a_bar = (lambda^2) I
-        Eigen::Matrix2<T> E = (1.0 / (lam * lam)) * (((Ff.transpose() * L * Ff)) - (1.0 / (lam * lam)) * b_bar);
-        //Eigen::Matrix2<T> E = (((Ff.transpose() * L * Ff)) - b_bar);
-
-        //std::cout << F.transpose() * L * F << '\n';
-
-
-        T trM = E.trace();
-        T trM2 = (E * E).trace();
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        Wb = Wb * (1.0 / lam_sqr);
+
         return T(w_b) * Wb * dA; });
 
   return func;
@@ -297,14 +287,14 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         T lam = 0.0;
         for(Vertex v: f.adjacentVertices())
           lam += lambda[v] / 3;
+
         T lam_sqr = lam * lam;
-
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
-
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) ;
-        Ws = Ws * (1.0 / (lam_sqr * lam_sqr));
+        Ws = Ws * (1.0 / lam_sqr);
+
         return T(w_s) * Ws * dA; });
 
   func.add_elements<6>(
@@ -328,7 +318,6 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         T lam = 0.0;
         for(Vertex v: f.adjacentVertices())
           lam += lambda[v] / 3;
-        T lam_sqr = lam * lam;
         T kap = 0.0;
         for(Vertex v: f.adjacentVertices())
           kap += kappa[v] / 3;
@@ -358,17 +347,14 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         }
         L /= n.squaredNorm();
 
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d ::Identity();
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        Wb = Wb * (1.0 / lam_sqr);
 
-        // 本征度量 a_bar = (lambda^2) I
-        Eigen::Matrix2<T> E = (F.transpose() * L * F) - lam_sqr * b_bar;
-
-        // std::cout << F.transpose() * L * F << '\n';
-
-        T trM = E.trace();
-        T trM2 = (E * E).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h *  T(1.0 / 3);
-        Wb = Wb * (1.0 / (lam_sqr * lam_sqr));
         return T(w_b) * Wb * dA; });
 
   return func;
@@ -438,14 +424,12 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         // }
 
         T lam_sqr = lam * lam;
-
-        // Green strain E = 0.5*(a_bar^{-1} a - I)
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
-
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * (1.0 / (lam_sqr * lam_sqr));
+        Ws = Ws * (1.0 / lam_sqr);
+        
         return T(w_s) * Ws * dA; });
 
   // 2nd fundamental form (bending energy)
@@ -514,15 +498,13 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         }
         L /= n.squaredNorm();
 
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
 
-        // Intrinsic metric a_bar = (lambda^2) I
-        Eigen::Matrix2<T> E = (F.transpose() * L * F) - lam_sqr * b_bar;
-
-        T trM = E.trace();
-        T trM2 = (E * E).trace();
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * (1.0 / (lam_sqr * lam_sqr));
+        Wb = Wb * (1.0 / lam_sqr);
         return T(w_b) * Wb * dA; });
 
   return func;
@@ -584,7 +566,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * (1.0 / (lam_sqr * lam_sqr));
+        Ws = Ws * (1.0 / lam_sqr);
         return T(w_s) * Ws * dA; });
 
   // 2nd fundamental form (bending energy)
@@ -634,15 +616,13 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         }
         L /= n.squaredNorm();
 
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
 
-        // Intrinsic metric a_bar = (lambda^2) I
-        Eigen::Matrix2<T> E = (F.transpose() * L * F) - lam_sqr * b_bar;
-
-        T trM = E.trace();
-        T trM2 = (E * E).trace();
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * (1.0 / (lam_sqr * lam_sqr));
+        Wb = Wb * (1.0 / lam_sqr);
         return T(w_b) * Wb * dA; });
 
   return func;
@@ -699,7 +679,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
                          T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-                         Ws = Ws * 1.0 / (lam_sqr * lam_sqr);
+                         Ws = Ws * 1.0 / lam_sqr;
                          return T(w_s) * Ws * dA;
                        });
 
@@ -786,7 +766,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * 1.0 / (lam_sqr * lam_sqr);
+        Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -837,17 +817,15 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                          // 第一基本型 a = F^T F
                          Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
 
-                         // 本征度量 a_bar = (lambda^2) I
                          T lam = T(lambda[f_idx]);
-                         Eigen::Matrix<T, 2, 2> a_bar_inv = T(1.0 / (lam * lam)) * Eigen::Matrix<T, 2, 2>::Identity();
+                         T lam_sqr = lam * lam;
 
-                         // Green 应变 E = 0.5*(a_bar^{-1} a - I)
-                         Eigen::Matrix<T, 2, 2> Egreen = ((a_bar_inv * a) - Eigen::Matrix<T, 2, 2>::Identity());
+                         Eigen::Matrix<T, 2, 2> eps_s = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
-                         T trM = Egreen.trace();
-                         T trM2 = (Egreen * Egreen).trace();
+                         T trM = eps_s.trace();
+                         T trM2 = (eps_s * eps_s).trace();
                          T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-                         Ws = Ws * lam * lam;
+                         Ws = Ws * T(1.0) / lam_sqr;
                          return T(w_s) * Ws * dA;
                        });
 
@@ -919,15 +897,143 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
             element.variables(3 * mesh.nVertices() + F(f_idx, 2));
         T kap = (kappa_f(0) + kappa_f(1) + kappa_f(2)) / 3;
 
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2d ::Identity();
+        T lam = T(lambda[f]);
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
+
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        Wb = Wb * T(1.0) / lam_sqr;
+        return T(w_b) * Wb * dA;
+      });
+
+  return func;
+}
+
+// Per-face kappa version: variables = [x(3|V|), kap(|F|)]
+// kappa is per-face (|F| DOFs), no vertex-to-face averaging
+TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKapPF(IntrinsicGeometryInterface &geometry,
+                                                                              const Eigen::MatrixXi &F,
+                                                                              const FaceData<Eigen::Matrix2d> &MrInv,
+                                                                              const FaceData<double> &lambda,
+                                                                              double E,
+                                                                              double nu,
+                                                                              double h,
+                                                                              double w_s,
+                                                                              double w_b)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+
+  const double alpha = E * nu / (1 - nu * nu);
+  const double beta = E / (2 * (1 + nu));
+
+  // Variables: [x(3|V|), kap(|F|)]
+  TinyAD::ScalarFunction<1, double, Eigen::Index> func =
+      TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nFaces()));
+
+  // 1st fundamental form (stretching) — same as existing, kappa not involved
+  func.add_elements<9>(TinyAD::range(F.rows()),
+                       [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+                       {
+                         using T = TINYAD_SCALAR_TYPE(element);
+                         Eigen::Index f_idx = element.handle;
+
+                         Eigen::Matrix<T, 3, 2> M;
+                         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+                             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+                             element.variables(3 * F(f_idx, 1) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+                             element.variables(3 * F(f_idx, 2) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+                             element.variables(3 * F(f_idx, 1) + 2) - element.variables(3 * F(f_idx, 0) + 2),
+                             element.variables(3 * F(f_idx, 2) + 2) - element.variables(3 * F(f_idx, 0) + 2);
+
+                         double dA = 0.5 / MrInv[f_idx].determinant();
+
+                         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
+                         Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
+
+                         T lam = T(lambda[f_idx]);
+                         T lam_sqr = lam * lam;
+
+                         Eigen::Matrix<T, 2, 2> eps_s = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
+
+                         T trM = eps_s.trace();
+                         T trM2 = (eps_s * eps_s).trace();
+                         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         Ws = Ws * T(1.0) / lam_sqr;
+                         return T(w_s) * Ws * dA;
+                       });
+
+  // 2nd fundamental form (bending) — kappa is per-face, ONE variable per face
+  geometry.requireVertexIndices();
+
+  func.add_elements<3 * 6 + 1>(
+      TinyAD::range(F.rows()),
+      [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+
+        Eigen::Matrix<T, 3, 2> M;
+        M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 1) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 2) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 1) + 2) - element.variables(3 * F(f_idx, 0) + 2),
+            element.variables(3 * F(f_idx, 2) + 2) - element.variables(3 * F(f_idx, 0) + 2);
+
+        double dA = 0.5 / MrInv[f_idx].determinant();
+
+        Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
+
+        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
+
+        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
+        Face f = mesh.face(f_idx);
+        for (Halfedge he : f.adjacentHalfedges())
+        {
+          if (he.edge().isBoundary())
+            continue;
+
+          Eigen::Vector3<T> e;
+          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
+                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
+              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
+              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+
+          Eigen::Vector3<T> nf;
+          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
+                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
+              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
+              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+          nf = nf.cross(e);
+          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
+
+          Eigen::Vector3<T> t = n.cross(e);
+
+          L += theta * t.normalized() * t.transpose();
+        }
+        L /= n.squaredNorm();
+
+        // Per-face kappa: directly access face variable (NO averaging!)
+        T kap = element.variables(3 * mesh.nVertices() + f_idx)(0);
 
         T lam = T(lambda[f]);
-        Eigen::Matrix2<T> Egreen = (1.0 / (lam * lam)) * (((Ff.transpose() * L * Ff)) - (1.0 / (lam * lam)) * b_bar);
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
-        T trM = Egreen.trace();
-        T trM2 = (Egreen * Egreen).trace();
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
+
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * lam * lam;
+        Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -992,7 +1098,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * 1.0 / (lam_sqr * lam_sqr);
+        Ws = Ws * 1.0 / lam_sqr;
         return T(w_s) * Ws * dA;
       });
 
@@ -1075,7 +1181,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * 1.0 / (lam_sqr * lam_sqr);
+        Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -1142,7 +1248,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
 
         // same as your original code
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * T(1.0) / (lam_sqr * lam_sqr);
+        Ws = Ws * T(1.0) / lam_sqr;
 
         return T(w_s) * Ws * dA;
       });
@@ -1193,7 +1299,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
               element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
                   element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
 
-          // compute dihedral angle (your original continues…)
+          // compute dihedral angle
           Eigen::Vector3<T> nf;
           nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
                     element.variables(3 * geometry.vertexIndices[he.vertex()]),
@@ -1201,11 +1307,13 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
                   element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
               element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
                   element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+          nf = nf.cross(e);
+          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
 
-          // ...（保持你原来的 theta / L 累加方式不变）
-          // theta = ...
-          // t = n.cross(e)
-          // L += theta * t.normalized() * t.transpose();
+          Eigen::Vector3<T> t = n.cross(e);
+
+          // add edge contribution
+          L += theta * t.normalized() * t.transpose();
         }
 
         L /= n.squaredNorm();
@@ -1226,10 +1334,136 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
 
-        // same bending energy form as your original
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * lam * lam;
+        Wb = Wb * T(1.0) / lam_sqr;
 
+        return T(w_b) * Wb * dA;
+      });
+
+  return func;
+}
+
+// Per-face kappa version of FixKap_OptLam2
+// Variables: [x (3|V|), lambda (|F|)], kappa is FaceData constant
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
+                               const Eigen::MatrixXi &F,
+                               const FaceData<Eigen::Matrix2d> &MrInv,
+                               const FaceData<double> &kappa, // FaceData kappa (fixed)
+                               double E,
+                               double nu,
+                               double h,
+                               double w_s,
+                               double w_b)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+
+  const double alpha = E * nu / (1 - nu * nu);
+  const double beta = E / (2 * (1 + nu));
+
+  // Variables: [x (3|V|), lambda (|F|)]
+  TinyAD::ScalarFunction<1, double, Eigen::Index> func =
+      TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nFaces()));
+
+  // 1st fundamental form (stretching) — same as VD kappa version
+  func.add_elements<6 + 6>(
+      TinyAD::range(F.rows()),
+      [&, alpha, beta, E, nu, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+
+        Eigen::Matrix<T, 3, 2> M;
+        M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 1) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 2) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 1) + 2) - element.variables(3 * F(f_idx, 0) + 2),
+            element.variables(3 * F(f_idx, 2) + 2) - element.variables(3 * F(f_idx, 0) + 2);
+
+        double dA = 0.5 / MrInv[f_idx].determinant();
+        Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
+        Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
+
+        T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
+        T lam_sqr = lam * lam;
+
+        Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
+
+        T trM = Egreen.trace();
+        T trM2 = (Egreen * Egreen).trace();
+        T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+        Ws = Ws * T(1.0) / lam_sqr;
+        return T(w_s) * Ws * dA;
+      });
+
+  // 2nd fundamental form (bending) — kappa from FaceData directly
+  geometry.requireVertexIndices();
+
+  func.add_elements<3 * 6 + 3>(
+      TinyAD::range(F.rows()),
+      [&, alpha, beta, E, nu, h, w_s, w_b, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+
+        Eigen::Matrix<T, 3, 2> M;
+        M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
+            element.variables(3 * F(f_idx, 1) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 2) + 1) - element.variables(3 * F(f_idx, 0) + 1),
+            element.variables(3 * F(f_idx, 1) + 2) - element.variables(3 * F(f_idx, 0) + 2),
+            element.variables(3 * F(f_idx, 2) + 2) - element.variables(3 * F(f_idx, 0) + 2);
+
+        double dA = 0.5 / MrInv[f_idx].determinant();
+        Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
+        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
+
+        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
+        Face f = mesh.face(f_idx);
+
+        for (Halfedge he : f.adjacentHalfedges())
+        {
+          if (he.edge().isBoundary())
+            continue;
+
+          Eigen::Vector3<T> e;
+          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
+                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
+              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
+              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+
+          Eigen::Vector3<T> nf;
+          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
+                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
+              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
+              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
+                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+          nf = nf.cross(e);
+          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
+
+          Eigen::Vector3<T> t = n.cross(e);
+          L += theta * t.normalized() * t.transpose();
+        }
+
+        L /= n.squaredNorm();
+
+        T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
+        T lam_sqr = lam * lam;
+
+        // Per-face kappa: direct access, NO averaging
+        double kap = kappa[f];
+
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
+        Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
+
+        T trM = Egreen.trace();
+        T trM2 = (Egreen * Egreen).trace();
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -1314,7 +1548,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * T(1.0) / (lam_sqr * lam_sqr);
+        Ws = Ws * T(1.0) / lam_sqr;
         return T(w_s) * Ws * dA;
       });
 
@@ -1402,15 +1636,14 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
         // }
 
         T lam_sqr = lam * lam;
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2<T>::Identity();
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2<T>::Identity();
 
-        // Bending strain
-        Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - lam_sqr * b_bar;
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
 
-        T trM = Egreen.trace();
-        T trM2 = (Egreen * Egreen).trace();
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * T(1.0) / (lam_sqr * lam_sqr);
+        Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -1495,7 +1728,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
-        Ws = Ws * T(1.0) / (lam_sqr * lam_sqr);
+        Ws = Ws * T(1.0) / lam_sqr;
         return T(w_s) * Ws * dA;
       });
 
@@ -1583,15 +1816,14 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
         // }
 
         T lam_sqr = lam * lam;
-        Eigen::Matrix2<T> b_bar = kap * Eigen::Matrix2<T>::Identity();
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2<T>::Identity();
 
-        // Bending strain
-        Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - lam_sqr * b_bar;
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
 
-        T trM = Egreen.trace();
-        T trM2 = (Egreen * Egreen).trace();
+        T trM = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
         T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
-        Wb = Wb * T(1.0) / (lam_sqr * lam_sqr);
+        Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
 
@@ -1616,22 +1848,12 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> MaterialPenaltyFunctionPerV(Intr
                          T theta = element.variables(v_idx)(0);
 
                          T r = T(0.0);
-                         // for(int j = 0; j < feasible_cnt; ++j)
-                         // {
-                         //   T theta_j = T(feasible_vals[j]);
-                         //   T diff = theta - theta_j;
-                         //   r += exp(-T(beta) * diff * diff);
-                         // }
-                         r = 1e6;
                          for (int j = 0; j < feasible_cnt; ++j)
                          {
                            T theta_j = T(feasible_vals[j]);
                            T diff = theta - theta_j;
-                           T sqdiff = diff * diff;
-                           if (sqdiff < r)
-                             r = sqdiff;
+                           r += exp(-T(beta) * diff * diff);
                          }
-                         r = exp(-T(beta) * r);
 
                          return -log(r + T(1e-12)) / T(nV);
                        });
@@ -1659,18 +1881,14 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
         Eigen::Index f_idx = element.handle;
         T theta = element.variables(f_idx)(0);
 
-        // soft-min / min-distance-to-feasible set
-        T r = T(1e6);
+        // soft-min via log-sum-exp
+        T r = T(0.0);
         for (int j = 0; j < feasible_cnt; ++j)
         {
           T theta_j = T(feasible_vals[j]);
           T diff = theta - theta_j;
-          T sqdiff = diff * diff;
-          if (sqdiff < r)
-            r = sqdiff;
+          r += exp(-T(beta) * diff * diff);
         }
-
-        r = exp(-T(beta) * r);
 
         // average over faces
         return -log(r + T(1e-12)) / T(nF);

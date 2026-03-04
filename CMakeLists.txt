@@ -77,3 +77,21 @@ if (MSVC)
     target_compile_options(${ProjectName} PRIVATE /utf-8)
     set_target_properties(${ProjectName} PROPERTIES LINK_FLAGS "/STACK:10485760")
 endif()
+
+# Gradient verification test
+add_executable(test_penalty_gradient
+  tests/test_penalty_gradient.cpp
+  src/functions.cpp
+)
+target_link_libraries(test_penalty_gradient PRIVATE
+  igl::core
+  igl::opengl
+  igl::stb
+  glfw::glfw
+  geometry-central
+  TinyAD
+)
+target_include_directories(test_penalty_gradient PRIVATE
+  "${CMAKE_SOURCE_DIR}/include"
+  "${CMAKE_SOURCE_DIR}/src"
+)

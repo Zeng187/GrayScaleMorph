@@ -1,8 +1,15 @@
 #pragma once
 
 #include <Eigen/SparseCore>
+#include <geometrycentral/surface/intrinsic_geometry_interface.h>
+#include <geometrycentral/surface/surface_mesh.h>
 
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size);
+
+// Build cotan Laplacian from flat reference domain (using MrInv) instead of target surface
+Eigen::SparseMatrix<double> buildFlatCotanLaplacian(
+    geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+    const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv);
 
 Eigen::SparseMatrix<double> buildHGN(const Eigen::VectorXd& masses,
                                      const Eigen::SparseMatrix<double>& P,

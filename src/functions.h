@@ -90,6 +90,18 @@ adjointFunction_FixLam_OptKap(geometrycentral::surface::IntrinsicGeometryInterfa
                               double w_s,
                               double w_b);
 
+// Per-face kappa version: variables = [x(3|V|), kap(|F|)]
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixLam_OptKapPF(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                              const Eigen::MatrixXi &F,
+                              const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
+                              const geometrycentral::surface::FaceData<double> &lambda,
+                              double E,
+                              double nu,
+                              double h,
+                              double w_s,
+                              double w_b);
+
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction_FixKap_OptLam(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                               const Eigen::MatrixXi &F,
@@ -106,6 +118,18 @@ adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterf
                                const Eigen::MatrixXi &F,
                                const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                                const geometrycentral::surface::VertexData<double> &kappa,
+                               double E,
+                               double nu,
+                               double h,
+                               double w_s,
+                               double w_b);
+
+// Per-face kappa version: kappa is FaceData (fixed), lambda is FaceData (opt)
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                               const Eigen::MatrixXi &F,
+                               const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
+                               const geometrycentral::surface::FaceData<double> &kappa,
                                double E,
                                double nu,
                                double h,
