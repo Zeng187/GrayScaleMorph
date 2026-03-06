@@ -30,7 +30,7 @@
 
 // #define __VERFIY_FORWARD_PREDIT__
 // #define __VERFIY_INVERSE_DESIGN__
-#define __VERIFY_ROUNDTRIP__
+// #define __VERIFY_ROUNDTRIP__
 
 #define __Add_PENALTY__
 
@@ -192,27 +192,97 @@ int main(int argc, char* argv[])
 
     ///***************************************** Forward Predit *****************************************///
 
-    // spdlog::info("Step 3: Forward Predit.");
-
+    spdlog::info("Step 3: Forward Predict (feasible parameters -> target shape for inverse design).");
 
     auto V_pred = V, Vr = V;
 
-    // auto simul_func_2 = simulationFunction(geometry,
-    //     MrInv, 
-    //     lambda_pv_s,
-    //     kappa_pv_s, 
-	// 	E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b
-    //     );
+    // Generate spatially varying FEASIBLE material distribution,
+    // forward simulate to get target shape, then perturb as initial guess for inverse design.
+    {
+        geometry.requireVertexIndices();
+        geometry.requireFaceIndices();
 
-    // Vr = V;
-    // newton(geometry, Vr, simul_func_2, config.RuntimeSetting.MaxIter, 
-    //     config.RuntimeSetting.epsilon, true, fixedIdx);
+        // Compute face centroids in parameterization domain
+        Eigen::MatrixXd face_centroids(nF, 2);
+        for (int fi = 0; fi < (int)nF; ++fi) {
+            face_centroids.row(fi) = (P.row(F(fi, 0)) + P.row(F(fi, 1)) + P.row(F(fi, 2))) / 3.0;
+        }
+        Eigen::Vector2d cmin = face_centroids.colwise().minCoeff();
+        Eigen::Vector2d cmax = face_centroids.colwise().maxCoeff();
+        for (int fi = 0; fi < (int)nF; ++fi) {
+            face_centroids(fi, 0) = (face_centroids(fi, 0) - cmin(0)) / (cmax(0) - cmin(0));
+            face_centroids(fi, 1) = (face_centroids(fi, 1) - cmin(1)) / (cmax(1) - cmin(1));
+        }
 
-    // V_pred = Vr;
-    // V_pred *= 1.0 / scaleFactor;
-    // std::string output_mesh_pred_path_2 = config.OutputSetting.OutputPath + 
-    //     config.ModelSetting.ModelName + "_pred" + ".obj";
-    // igl::writeOBJ(output_mesh_pred_path_2, V_pred, F);
+        // Assign feasible (t1, t2) based on face centroid position
+        FaceData<double> lambda_true(mesh);
+        FaceData<double> kappa_true(mesh);
+        {
+            int fi = 0;
+            for (Face f : mesh.faces()) {
+                double nx = face_centroids(fi, 0);
+                double ny = face_centroids(fi, 1);
+                int i1 = std::clamp((int)std::round(nx * (ac.count - 1)), 0, ac.count - 1);
+                int i2 = std::clamp((int)std::round((1.0 - ny) * (ac.count - 1)), 0, ac.count - 1);
+                double t1 = (double)i1 / (ac.count - 1);
+                double t2 = (double)i2 / (ac.count - 1);
+                lambda_true[f] = compute_lamb_d(ac.m_strain_curve, t1, t2);
+                kappa_true[f] = compute_curv_d(ac.m_strain_curve, ac.thickness, t1, t2);
+                fi++;
+            }
+        }
+
+        // Report true parameter statistics
+        {
+            Eigen::VectorXd lv = lambda_true.toVector(), kv = kappa_true.toVector();
+            spdlog::info("True feasible lambda: min={:.6f}, max={:.6f}, mean={:.6f}",
+                lv.minCoeff(), lv.maxCoeff(), lv.mean());
+            spdlog::info("True feasible kappa:  min={:.6f}, max={:.6f}, mean={:.6f}",
+                kv.minCoeff(), kv.maxCoeff(), kv.mean());
+        }
+
+        // Forward simulate with true feasible parameters -> target shape
+        auto simFunc_fwd = simulationFunction(geometry, MrInv, lambda_true, kappa_true,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        newton(geometry, Vr, simFunc_fwd, config.RuntimeSetting.MaxIter,
+            config.RuntimeSetting.epsilon, true, fixedIdx);
+        targetV = Vr;  // THIS is the achievable target
+
+        spdlog::info("Forward prediction done. Target shape set from feasible-parameter simulation.");
+
+        V_pred = Vr;
+        V_pred *= 1.0 / scaleFactor;
+        std::string output_mesh_pred_path = config.OutputSetting.OutputPath +
+            config.ModelSetting.ModelName + "_pred" + ".obj";
+        igl::writeOBJ(output_mesh_pred_path, V_pred, F);
+
+        // Perturb initial parameters: use feasible-set mean as starting point
+        // (far from the true spatially varying values)
+        double mean_lam = 0, mean_kap = 0;
+        for (auto v : ac.feasible_lamb) mean_lam += v;
+        mean_lam /= ac.feasible_lamb.size();
+        for (auto v : ac.feasible_kapp) mean_kap += v;
+        mean_kap /= ac.feasible_kapp.size();
+
+        for (Face f : mesh.faces()) {
+            lambda_pf_s[f] = mean_lam;
+            kappa_pf_s[f] = mean_kap;
+        }
+        spdlog::info("Initial guess: uniform mean lambda={:.6f}, kappa={:.6f}", mean_lam, mean_kap);
+
+        // Forward simulate with initial guess to get initial Vr
+        auto simFunc_init = simulationFunction(geometry, MrInv, lambda_pf_s, kappa_pf_s,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        Vr = V;  // start from flat
+        newton(geometry, Vr, simFunc_init, config.RuntimeSetting.MaxIter,
+            config.RuntimeSetting.epsilon, false, fixedIdx);
+
+        double init_dist = (Vr - targetV).squaredNorm() / nV;
+        double init_pen_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+        double init_pen_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+        spdlog::info("Initial: distance={:.6f}, pen_kap={:.6f}, pen_lam={:.6f}",
+            init_dist, init_pen_kap, init_pen_lam);
+    }
 
 
     // ///***************************************** Inverse Design *****************************************///
@@ -378,8 +448,30 @@ int main(int argc, char* argv[])
             double lam_err = (lam_final - lam_true_vec).norm() / lam_true_vec.norm();
             double kap_err = (kap_final - kap_true_vec).norm() / kap_true_vec.norm();
             double dist_final = (Vr_test - targetV_rt).squaredNorm() / nV;
+            double pen_k_t1 = compute_candidate_diff(ac.feasible_kapp, kap_final, true);
+            double pen_l_t1 = compute_candidate_diff(ac.feasible_lamb, lam_final, true);
             spdlog::info("[T1] FINAL: lam relErr={:.4f}%, kap relErr={:.4f}%, dist={:.10f}",
                 lam_err * 100, kap_err * 100, dist_final);
+            spdlog::info("[T1] FINAL: pen_kap={:.6f}, pen_lam={:.6f}", pen_k_t1, pen_l_t1);
+
+            // Project to nearest feasible material and forward-simulate
+            {
+                FaceData<double> kappa_proj(mesh);
+                FaceData<double> lambda_proj(mesh);
+                for (Face f : mesh.faces()) {
+                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                        kappa_test[f], lambda_test[f]);
+                    kappa_proj[f] = ac.feasible_kapp[idx];
+                    lambda_proj[f] = ac.feasible_lamb[idx];
+                }
+                auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_proj, kappa_proj,
+                    E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+                Eigen::MatrixXd Vr_proj = Vr_test;
+                newton(geometry, Vr_proj, simFunc_proj,
+                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+                double dist_proj = (Vr_proj - targetV_rt).squaredNorm() / nV;
+                spdlog::info("[T1] PROJECTED (feasible material): dist={:.10f}", dist_proj);
+            }
 
             {
                 auto V_out = Vr_test * (1.0 / scaleFactor);
@@ -472,6 +564,25 @@ int main(int argc, char* argv[])
                 lam_err * 100, kap_err * 100, dist_final);
             spdlog::info("[T2] FINAL: pen_kap={:.6f}, pen_lam={:.6f}", pen_k_final, pen_l_final);
 
+            // Project to nearest feasible material and forward-simulate
+            {
+                FaceData<double> kappa_proj(mesh);
+                FaceData<double> lambda_proj(mesh);
+                for (Face f : mesh.faces()) {
+                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                        kappa_test[f], lambda_test[f]);
+                    kappa_proj[f] = ac.feasible_kapp[idx];
+                    lambda_proj[f] = ac.feasible_lamb[idx];
+                }
+                auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_proj, kappa_proj,
+                    E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+                Eigen::MatrixXd Vr_proj = Vr_test;
+                newton(geometry, Vr_proj, simFunc_proj,
+                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+                double dist_proj = (Vr_proj - targetV_rt).squaredNorm() / nV;
+                spdlog::info("[T2] PROJECTED (feasible material): dist={:.10f}", dist_proj);
+            }
+
             {
                 auto V_out = Vr_test * (1.0 / scaleFactor);
                 std::string path = config.OutputSetting.OutputPath + config.ModelSetting.ModelName + "_rt_T2.obj";
@@ -550,8 +661,30 @@ int main(int argc, char* argv[])
             double lam_err = (lam_final - lam_true_vec).norm() / lam_true_vec.norm();
             double kap_err = (kap_final - kap_true_vec).norm() / kap_true_vec.norm();
             double dist_final = (Vr_test - targetV_rt).squaredNorm() / nV;
+            double pen_k_t3 = compute_candidate_diff(ac.feasible_kapp, kap_final, true);
+            double pen_l_t3 = compute_candidate_diff(ac.feasible_lamb, lam_final, true);
             spdlog::info("[T3] FINAL: lam relErr={:.4f}%, kap relErr={:.4f}%, dist={:.10f}",
                 lam_err * 100, kap_err * 100, dist_final);
+            spdlog::info("[T3] FINAL: pen_kap={:.6f}, pen_lam={:.6f}", pen_k_t3, pen_l_t3);
+
+            // Project to nearest feasible material and forward-simulate
+            {
+                FaceData<double> kappa_proj(mesh);
+                FaceData<double> lambda_proj(mesh);
+                for (Face f : mesh.faces()) {
+                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                        kappa_test[f], lambda_test[f]);
+                    kappa_proj[f] = ac.feasible_kapp[idx];
+                    lambda_proj[f] = ac.feasible_lamb[idx];
+                }
+                auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_proj, kappa_proj,
+                    E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+                Eigen::MatrixXd Vr_proj = Vr_test;
+                newton(geometry, Vr_proj, simFunc_proj,
+                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+                double dist_proj = (Vr_proj - targetV_rt).squaredNorm() / nV;
+                spdlog::info("[T3] PROJECTED (feasible material): dist={:.10f}", dist_proj);
+            }
 
             {
                 auto V_out = Vr_test * (1.0 / scaleFactor);
@@ -575,7 +708,7 @@ int main(int argc, char* argv[])
     auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
     auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
-    int stage_iter = 5;
+    int stage_iter = 10;
     int k = 0;
 
     double wM_kap = config.RuntimeSetting.wM_kap;
@@ -588,23 +721,28 @@ int main(int argc, char* argv[])
     double distance = 0.0;
     double penalty_kap = 0.0;
     double penalty_lam = 0.0;
+    double best_proj_dist = std::numeric_limits<double>::max();
+    int stagnation_count = 0;
+    const int stagnation_limit = 3;  // stop if no improvement for 3 consecutive stages
+
+    // Save best state for rollback
+    FaceData<double> best_kappa_pf(mesh);
+    FaceData<double> best_lambda_pf(mesh);
+    Eigen::MatrixXd best_Vr;
+
     while(k < stage_iter)
     {
         spdlog::info("Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
-        // Vr = targetV;
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKapPF(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
             E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
 
-        // Compute and output distance and penalties after OptKap
         distance = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
         spdlog::info("Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                      k, distance, penalty_kap, penalty_lam);
-
-
 
         spdlog::info("Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
@@ -612,22 +750,21 @@ int main(int argc, char* argv[])
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
             E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
 
-        // Compute and output distance and penalties after OptLam
         distance = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
         spdlog::info("Stage {}, OptLam finish- Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                      k, distance, penalty_kap, penalty_lam);
 
-        // Evaluate distance after jointly projecting kappa and lambda to the same feasible index
+        // Evaluate projected distance (project to nearest feasible pair, forward-simulate)
+        double dist_proj = 0.0;
         {
             FaceData<double> kappa_pf_proj(mesh);
             FaceData<double> lambda_pf_proj(mesh);
 
             for (Face f : mesh.faces()) {
-                double kap = kappa_pf_s[f];
-                double lam = lambda_pf_s[f];
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                    kappa_pf_s[f], lambda_pf_s[f]);
                 kappa_pf_proj[f] = ac.feasible_kapp[idx];
                 lambda_pf_proj[f] = ac.feasible_lamb[idx];
             }
@@ -637,18 +774,41 @@ int main(int argc, char* argv[])
             Eigen::MatrixXd Vr_proj = Vr;
             newton(geometry, Vr_proj, simFunc_proj,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
-            double dist_proj = (Vr_proj - targetV).squaredNorm() / nV;
+            dist_proj = (Vr_proj - targetV).squaredNorm() / nV;
 
-            spdlog::info("Stage {}, Projected distance: {:.6f}", k, dist_proj);
+            spdlog::info("Stage {}, Projected distance: {:.6f} (best: {:.6f})", k, dist_proj, best_proj_dist);
+        }
+
+        // Track best projected distance and save state
+        if (dist_proj < best_proj_dist) {
+            best_proj_dist = dist_proj;
+            best_kappa_pf = kappa_pf_s;
+            best_lambda_pf = lambda_pf_s;
+            best_Vr = Vr;
+            stagnation_count = 0;
+        } else {
+            stagnation_count++;
         }
 
         k++;
 
-        // BUG-10 fix: adaptive weight strategy (gentler than original 10x/0.1x)
-        if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+        // Early stop 1: both penalties below threshold
+        if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold) {
+            spdlog::info("Both penalties below threshold. Stopping.");
             break;
+        }
 
-        // Penalty growth: gentle 2x (was 10x)
+        // Early stop 2: projected distance not improving
+        if (stagnation_count >= stagnation_limit) {
+            spdlog::info("Projected distance not improving for {} stages. Rolling back to best (dist_proj={:.6f}).",
+                stagnation_limit, best_proj_dist);
+            kappa_pf_s = best_kappa_pf;
+            lambda_pf_s = best_lambda_pf;
+            Vr = best_Vr;
+            break;
+        }
+
+        // Penalty growth: 2x only for parameters still above threshold
         if (penalty_kap >= penalty_threshold) {
             wP_kap *= 2.0;
         }
@@ -656,7 +816,7 @@ int main(int argc, char* argv[])
             wP_lam *= 2.0;
         }
 
-        // Regularization decay: gentle 0.5x (was 0.1x) with floor
+        // Regularization decay: gentle 0.5x with floor
         double wM_kap_floor = config.RuntimeSetting.wM_kap * 1e-3;
         double wL_kap_floor = config.RuntimeSetting.wL_kap * 1e-3;
         double wM_lam_floor = config.RuntimeSetting.wM_lam * 1e-3;
