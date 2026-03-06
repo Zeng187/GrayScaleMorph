@@ -3,26 +3,30 @@
     "configurations": [
         {
             "name": "Debug GrayScaleMorph",
-            "type": "cppvsdbg",
+            "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Debug/GrayScaleMorph.exe",
+            "program": "${workspaceFolder}/build/GrayScaleMorph",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/src",
             "environment": [],
             "console": "integratedTerminal",
-            // "preLaunchTask": "CMake: Build"
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            // "preLaunchTask": "CMake: Build Debug"
         },
         {
             "name": "Release GrayScaleMorph",
-            "type": "cppvsdbg",
+            "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Release/GrayScaleMorph.exe",
+            "program": "${workspaceFolder}/build/GrayScaleMorph",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/src",
             "environment": [],
             "console": "integratedTerminal",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
             // "preLaunchTask": "CMake: Build Release"
         }
     ]

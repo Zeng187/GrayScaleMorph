@@ -7,8 +7,7 @@
             "command": "cmake",
             "args": [
                 "-S", "${workspaceFolder}",
-                "-B", "${workspaceFolder}/build",
-                "-G", "Ninja"
+                "-B", "${workspaceFolder}/build"
             ],
             "group": "build",
             "problemMatcher": []
@@ -25,7 +24,7 @@
                 "kind": "build",
                 // "isDefault": true
             },
-            "problemMatcher": "$msCompile",
+            "problemMatcher": "$gcc",
             "dependsOn": []
         },
         {
@@ -37,7 +36,7 @@
                 "--config", "Release"
             ],
             "group": "build",
-            "problemMatcher": "$msCompile"
+            "problemMatcher": "$gcc"
         },
         {
             "label": "CMake: Clean",
