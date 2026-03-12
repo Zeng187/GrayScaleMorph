@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}/build/GrayScaleMorph",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
@@ -27,7 +27,7 @@
             "program": "${workspaceFolder}/build/GrayScaleMorph",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
@@ -39,6 +39,31 @@
                 }
             ],
             "preLaunchTask": "CMake: build Release"
+        },
+        {
+            "name": "Debug PatchMetrics",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/PatchMetrics",
+            "args": [
+                "../../Resources/meshes/hemisphere.obj",
+                "../../Resources/segment/hemisphere/seg_id.txt",
+                "../../Resources/materials/grayscale-material.json",
+                "../../Resources/metrics/hemisphere/metrics.txt",
+                "40"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         }
     ]
 }
