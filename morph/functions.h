@@ -150,3 +150,30 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 MaterialPenaltyFunctionPerF(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                             const std::vector<double> &feasible_vals,
                             double beta);
+
+// Joint (lambda, kappa) penalty functions using paired feasible values.
+// Instead of penalizing lambda and kappa independently, these use 2D distance
+// to the paired feasible set, so the optimized variable is steered toward values
+// that are jointly feasible with the current fixed parameter.
+
+// For OptKap stage: variable=kappa (per-vertex), fixed=lambda (per-face).
+// Computes per-vertex average lambda from adjacent faces, then penalizes
+// 2D distance to paired (lam_j, kap_j) feasible points.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+JointMaterialPenaltyPerV_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                const Eigen::MatrixXi &F,
+                                const geometrycentral::surface::FaceData<double> &lambda_pf,
+                                const std::vector<double> &feasible_lamb,
+                                const std::vector<double> &feasible_kapp,
+                                double beta);
+
+// For OptLam stage: variable=lambda (per-face), fixed=kappa (per-vertex).
+// Computes per-face average kappa from 3 face vertices, then penalizes
+// 2D distance to paired (lam_j, kap_j) feasible points.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+JointMaterialPenaltyPerF_OptLam(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                const Eigen::MatrixXi &F,
+                                const geometrycentral::surface::VertexData<double> &kappa_pv,
+                                const std::vector<double> &feasible_lamb,
+                                const std::vector<double> &feasible_kapp,
+                                double beta);

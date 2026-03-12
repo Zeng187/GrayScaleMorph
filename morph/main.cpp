@@ -115,10 +115,6 @@ static void runInverseDesignOnPatch(
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
 
-    // Create penalty functions for this patch's geometry
-    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geom_p, ac.feasible_lamb, betaP);
-    auto penalty_to_kapp = MaterialPenaltyFunctionPerV(geom_p, ac.feasible_kapp, betaP);
-
     int stage_iter = 5;
     int k = 0;
 
@@ -140,6 +136,10 @@ static void runInverseDesignOnPatch(
 
     while (k < stage_iter)
     {
+        // Create joint penalty for OptKap: variable=kappa(per-vertex), fixed=lambda(per-face)
+        auto penalty_to_kapp = JointMaterialPenaltyPerV_OptKap(
+            geom_p, F_patch, lambda_pf_s, ac.feasible_lamb, ac.feasible_kapp, betaP);
+
         spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", patch_id, k, wP_kap, wP_lam);
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geom_p, F_patch, MrInv_p, lambda_pf_s,
             E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
@@ -153,6 +153,10 @@ static void runInverseDesignOnPatch(
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                      patch_id, k, distance, penalty_kap, penalty_lam);
+
+        // Create joint penalty for OptLam: variable=lambda(per-face), fixed=kappa(per-vertex)
+        auto penalty_to_lamb = JointMaterialPenaltyPerF_OptLam(
+            geom_p, F_patch, kappa_pv_s, ac.feasible_lamb, ac.feasible_kapp, betaP);
 
         spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", patch_id, k, wP_kap, wP_lam);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geom_p, F_patch, MrInv_p, kappa_pv_s,
@@ -579,10 +583,6 @@ int main(int argc, char* argv[])
     double wP_lam = config.RuntimeSetting.wP_lam;
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
-    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
-    auto penalty_to_kapp = MaterialPenaltyFunctionPerV(geometry, ac.feasible_kapp, betaP);
-    auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
-
     int stage_iter = 5;
     int k = 0;
 
@@ -601,8 +601,11 @@ int main(int argc, char* argv[])
     double penalty_lam = 0.0;
     while(k < stage_iter)
     {
+        // Create joint penalty for OptKap: variable=kappa(per-vertex), fixed=lambda(per-face)
+        auto penalty_to_kapp = JointMaterialPenaltyPerV_OptKap(
+            geometry, F, lambda_pf_s, ac.feasible_lamb, ac.feasible_kapp, betaP);
+
         spdlog::info("Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
-        // Vr = targetV;
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
@@ -615,7 +618,9 @@ int main(int argc, char* argv[])
         spdlog::info("Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                      k, distance, penalty_kap, penalty_lam);
 
-
+        // Create joint penalty for OptLam: variable=lambda(per-face), fixed=kappa(per-vertex)
+        auto penalty_to_lamb = JointMaterialPenaltyPerF_OptLam(
+            geometry, F, kappa_pv_s, ac.feasible_lamb, ac.feasible_kapp, betaP);
 
         spdlog::info("Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);

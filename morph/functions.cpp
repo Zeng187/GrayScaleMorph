@@ -1640,3 +1640,104 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
 
   return func;
 }
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+JointMaterialPenaltyPerV_OptKap(IntrinsicGeometryInterface &geometry,
+                                const Eigen::MatrixXi &F,
+                                const FaceData<double> &lambda_pf,
+                                const std::vector<double> &feasible_lamb,
+                                const std::vector<double> &feasible_kapp,
+                                double beta)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nV = static_cast<int>(mesh.nVertices());
+  const int nF_mesh = static_cast<int>(mesh.nFaces());
+  const int feasible_cnt = static_cast<int>(feasible_lamb.size());
+
+  // Precompute per-vertex average lambda from adjacent faces
+  std::vector<double> avg_lam(nV, 0.0);
+  std::vector<int> adj_cnt(nV, 0);
+  for (int fi = 0; fi < nF_mesh; ++fi) {
+    Face f = mesh.face(fi);
+    double lam_f = lambda_pf[f];
+    for (int k = 0; k < 3; ++k) {
+      int vi = F(fi, k);
+      avg_lam[vi] += lam_f;
+      adj_cnt[vi]++;
+    }
+  }
+  for (int vi = 0; vi < nV; ++vi) {
+    if (adj_cnt[vi] > 0) avg_lam[vi] /= adj_cnt[vi];
+  }
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nVertices()));
+
+  func.add_elements<1>(
+      TinyAD::range(mesh.nVertices()),
+      [feasible_lamb, feasible_kapp, avg_lam, feasible_cnt, beta, nV](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index v_idx = element.handle;
+        T kap = element.variables(v_idx)(0);
+        double lam_v = avg_lam[v_idx];
+
+        T r = T(0.0);
+        for (int j = 0; j < feasible_cnt; ++j) {
+          double d_lam = lam_v - feasible_lamb[j];
+          T d_kap = kap - T(feasible_kapp[j]);
+          T dist2 = T(d_lam * d_lam) + d_kap * d_kap;
+          r += exp(-T(beta) * dist2);
+        }
+
+        return -log(r + T(1e-12)) / T(nV);
+      });
+
+  return func;
+}
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+JointMaterialPenaltyPerF_OptLam(IntrinsicGeometryInterface &geometry,
+                                const Eigen::MatrixXi &F,
+                                const VertexData<double> &kappa_pv,
+                                const std::vector<double> &feasible_lamb,
+                                const std::vector<double> &feasible_kapp,
+                                double beta)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nF_mesh = static_cast<int>(mesh.nFaces());
+  const int feasible_cnt = static_cast<int>(feasible_lamb.size());
+
+  // Precompute per-face average kappa from 3 face vertices
+  std::vector<double> avg_kap(nF_mesh, 0.0);
+  for (int fi = 0; fi < nF_mesh; ++fi) {
+    double sum = 0.0;
+    for (int k = 0; k < 3; ++k) {
+      sum += kappa_pv[mesh.vertex(F(fi, k))];
+    }
+    avg_kap[fi] = sum / 3.0;
+  }
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
+
+  func.add_elements<1>(
+      TinyAD::range(mesh.nFaces()),
+      [feasible_lamb, feasible_kapp, avg_kap, feasible_cnt, beta, nF_mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+        T lam = element.variables(f_idx)(0);
+        double kap_f = avg_kap[f_idx];
+
+        T r = T(0.0);
+        for (int j = 0; j < feasible_cnt; ++j) {
+          T d_lam = lam - T(feasible_lamb[j]);
+          double d_kap = kap_f - feasible_kapp[j];
+          T dist2 = d_lam * d_lam + T(d_kap * d_kap);
+          r += exp(-T(beta) * dist2);
+        }
+
+        return -log(r + T(1e-12)) / T(nF_mesh);
+      });
+
+  return func;
+}
