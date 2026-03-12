@@ -18,36 +18,36 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/deps/libigl-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/geometry-central-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/TinyAD-src" EXCLUDE_FROM_ALL)
 
-file(GLOB_RECURSE RSC_FILES
-    "${CMAKE_SOURCE_DIR}/src/*.json"
+file(GLOB RSC_FILES
+    "${CMAKE_SOURCE_DIR}/*.json"
 )
 
 add_executable(
   ${ProjectName}
-  src/main.cpp
-  src/common.hpp
-  src/config.hpp
-  src/config.cpp
-  src/material.hpp
-  src/material.cpp
-  src/timer.h
-  src/solvers.h
-  src/newton.h
-  src/newton.cpp
-  src/parameterization.h
-  src/parameterization.cpp
-  src/LocalGlobalSolver.h
-  src/LocalGlobalSolver.cpp
-  src/simulation_utils.h
-  src/simulation_utils.cpp
-  src/functions.h
-  src/functions.cpp
-  src/morphmesh.hpp
-  src/morphmesh.cpp
-  src/morph_functions.hpp
-  src/morph_functions.cpp
-  src/output.hpp
-  src/output.cpp
+  morph/main.cpp
+  common/common.hpp
+  common/config.hpp
+  common/config.cpp
+  common/material.hpp
+  common/material.cpp
+  common/timer.h
+  common/solvers.h
+  morph/newton.h
+  morph/newton.cpp
+  morph/parameterization.h
+  morph/parameterization.cpp
+  morph/LocalGlobalSolver.h
+  morph/LocalGlobalSolver.cpp
+  morph/simulation_utils.h
+  morph/simulation_utils.cpp
+  morph/functions.h
+  morph/functions.cpp
+  morph/morphmesh.hpp
+  morph/morphmesh.cpp
+  morph/morph_functions.hpp
+  morph/morph_functions.cpp
+  common/output.hpp
+  common/output.cpp
   .gitignore
   ${RSC_FILES}
 )
@@ -66,14 +66,61 @@ target_link_libraries(
 target_include_directories(
   ${ProjectName}
   PRIVATE
+  "${CMAKE_SOURCE_DIR}/common"
+  "${CMAKE_SOURCE_DIR}/morph"
+  "${CMAKE_SOURCE_DIR}/metric"
   "${CMAKE_SOURCE_DIR}/include"
 )
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 set_target_properties(${ProjectName} PROPERTIES
-    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 if (MSVC)
     target_compile_options(${ProjectName} PRIVATE /utf-8)
     set_target_properties(${ProjectName} PROPERTIES LINK_FLAGS "/STACK:10485760")
+endif()
+
+# PatchMetrics — per-patch material feasibility metrics tool
+add_executable(PatchMetrics
+  metric/patch_metrics_main.cpp
+  metric/patch_utils.h
+  metric/patch_utils.cpp
+  common/common.hpp
+  common/material.hpp
+  common/material.cpp
+  morph/parameterization.h
+  morph/parameterization.cpp
+  morph/LocalGlobalSolver.h
+  morph/LocalGlobalSolver.cpp
+  morph/morphmesh.hpp
+  morph/morphmesh.cpp
+  morph/morph_functions.hpp
+  morph/morph_functions.cpp
+  morph/newton.h
+  morph/newton.cpp
+  morph/functions.h
+  morph/functions.cpp
+  morph/simulation_utils.h
+  morph/simulation_utils.cpp
+)
+
+target_link_libraries(PatchMetrics PRIVATE
+  igl::core
+  igl::opengl
+  igl::stb
+  glfw::glfw
+  geometry-central
+  TinyAD
+)
+
+target_include_directories(PatchMetrics PRIVATE
+  "${CMAKE_SOURCE_DIR}/common"
+  "${CMAKE_SOURCE_DIR}/morph"
+  "${CMAKE_SOURCE_DIR}/metric"
+  "${CMAKE_SOURCE_DIR}/include"
+)
+
+if (MSVC)
+    target_compile_options(PatchMetrics PRIVATE /utf-8)
 endif()
