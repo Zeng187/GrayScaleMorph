@@ -48,6 +48,8 @@ add_executable(
   morph/morph_functions.cpp
   common/output.hpp
   common/output.cpp
+  metric/patch_utils.h
+  metric/patch_utils.cpp
   .gitignore
   ${RSC_FILES}
 )
@@ -87,6 +89,8 @@ add_executable(PatchMetrics
   metric/patch_utils.h
   metric/patch_utils.cpp
   common/common.hpp
+  common/config.hpp
+  common/config.cpp
   common/material.hpp
   common/material.cpp
   morph/parameterization.h

@@ -21,6 +21,7 @@ Config::Config(const std::string& filePath) {
     auto& r = j["Resource"];
     ResourceSetting.ResourcePath = r["ResourcePath"][0];
     ResourceSetting.MaterialPath = r["MaterialPath"][0];
+    ResourceSetting.SegmentPath = r["SegmentPath"][0];
 
     auto& m = j["Model"];
     ModelSetting.ModelName = m["ModelName"][0];

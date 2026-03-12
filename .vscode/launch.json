@@ -45,13 +45,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/bin/PatchMetrics",
-            "args": [
-                "../../Resources/meshes/hemisphere.obj",
-                "../../Resources/segment/hemisphere/seg_id.txt",
-                "../../Resources/materials/grayscale-material.json",
-                "../../Resources/metrics/hemisphere/metrics.txt",
-                "40"
-            ],
+            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
 #ifdef _WIN32
 #include <io.h>
 #endif
@@ -28,11 +29,382 @@
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "output.hpp"
+#include "patch_utils.h"
 
 // #define __VERFIY_FORWARD_PREDIT__
 #define __VERFIY_INVERSE_DESIGN__
 
 #define __Add_PENALTY__
+
+/// Run the full SGN inverse design pipeline on a single mesh piece.
+/// Stores per-face t1, t2 results into global_t1, global_t2 at the given global_face_ids.
+/// Also writes per-face metrics (lambda/kappa excess) into global_lam_excess, global_kap_excess.
+static void runInverseDesignOnPatch(
+    const Eigen::MatrixXd& V_patch,   // patch vertices (already scaled to platewidth)
+    const Eigen::MatrixXi& F_patch,   // patch faces
+    const Eigen::MatrixXd& P_patch,   // patch parameterization (already scaled)
+    const std::vector<int>& global_face_ids, // mapping from patch face index to global face index
+    const Config& config,
+    const ActiveComposite& ac,
+    int patch_id,
+    // Output arrays (indexed by global face id)
+    Eigen::VectorXd& global_t1,
+    Eigen::VectorXd& global_t2,
+    Eigen::VectorXd& global_lam_excess,
+    Eigen::VectorXd& global_kap_excess,
+    // Output directories for per-patch OBJs
+    const std::string& morphDir)
+{
+    using namespace geometrycentral;
+    using namespace geometrycentral::surface;
+
+    int nV_p = V_patch.rows();
+    int nF_p = F_patch.rows();
+
+    spdlog::info("=== Patch {} inverse design: {} vertices, {} faces ===", patch_id, nV_p, nF_p);
+
+    // Build geometry-central structures for this patch
+    ManifoldSurfaceMesh mesh_p(F_patch);
+    VertexPositionGeometry geom_p(mesh_p, V_patch);
+    geom_p.refreshQuantities();
+
+    // Precompute MrInv from parameterization
+    FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, P_patch, F_patch);
+
+    // Find fixed vertex indices for this patch (center face of parameterization)
+    std::vector<int> fixedIdx_p = findCenterFaceIndices(P_patch, F_patch);
+
+    // Compute morphing parameters (target lambda, kappa)
+    double E = 1.0;
+    double nu = 0.5;
+    Morphmesh morph_p(V_patch, P_patch, F_patch, E, nu);
+
+    std::vector<bool> bv_flags(nV_p, false);
+    std::vector<bool> bf_flags(nF_p, false);
+    std::vector<int>  b_ref(nF_p, 0);
+
+    Morphmesh::ComputeMorphophing(geom_p, V_patch, F_patch,
+        nV_p, nF_p,
+        bv_flags, bf_flags, b_ref, MrInv_p,
+        morph_p.lambda_pv_t, morph_p.lambda_pf_t,
+        morph_p.kappa_pv_t, morph_p.kappa_pf_t,
+        &morph_p.vertex_area_sum);
+
+    Morphmesh::SetMorphophing(
+        morph_p.lambda_pv_t, morph_p.lambda_pf_t,
+        morph_p.kappa_pv_t, morph_p.kappa_pf_t,
+        morph_p.lambda_pv_s, morph_p.lambda_pf_s,
+        morph_p.kappa_pv_s, morph_p.kappa_pf_s);
+
+    Eigen::MatrixXd targetV_p = V_patch;
+
+    // Wrap morph params into FaceData/VertexData
+    FaceData<bool> is_boundary_face_p(mesh_p);
+    FaceData<int> boundary_ref_index_p(mesh_p);
+    VertexData<bool> is_boundary_vertex_p(mesh_p);
+    VertexData<double> lambda_pv_s(mesh_p, morph_p.lambda_pv_s);
+    VertexData<double> kappa_pv_s(mesh_p, morph_p.kappa_pv_s);
+    FaceData<double> lambda_pf_s(mesh_p, morph_p.lambda_pf_s);
+    FaceData<double> kappa_pf_s(mesh_p, morph_p.kappa_pf_s);
+
+    // SGN inverse design loop
+    spdlog::info("Patch {}: Starting SGN inverse design.", patch_id);
+
+    double wP_kap = config.RuntimeSetting.wP_kap;
+    double wP_lam = config.RuntimeSetting.wP_lam;
+    double penalty_threshold = config.RuntimeSetting.penalty_threshold;
+    double betaP = config.RuntimeSetting.betaP;
+
+    // Create penalty functions for this patch's geometry
+    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geom_p, ac.feasible_lamb, betaP);
+    auto penalty_to_kapp = MaterialPenaltyFunctionPerV(geom_p, ac.feasible_kapp, betaP);
+
+    int stage_iter = 5;
+    int k = 0;
+
+    double wM_kap = config.RuntimeSetting.wM_kap;
+    double wM_lam = config.RuntimeSetting.wM_lam;
+    double wL_kap = config.RuntimeSetting.wL_kap;
+    double wL_lam = config.RuntimeSetting.wL_lam;
+
+    const double wM_kap_init = wM_kap;
+    const double wM_lam_init = wM_lam;
+    const double wL_kap_init = wL_kap;
+    const double wL_lam_init = wL_lam;
+
+    double distance = 0.0;
+    double penalty_kap = 0.0;
+    double penalty_lam = 0.0;
+
+    Eigen::MatrixXd Vr_p = V_patch;
+
+    while (k < stage_iter)
+    {
+        spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", patch_id, k, wP_kap, wP_lam);
+        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geom_p, F_patch, MrInv_p, lambda_pf_s,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        Vr_p = sparse_gauss_newton_FixLam_OptKap_Penalty(geom_p, targetV_p, Vr_p, MrInv_p,
+            lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx_p,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+
+        distance = (Vr_p - targetV_p).squaredNorm() / nV_p;
+        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
+        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+        spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
+                     patch_id, k, distance, penalty_kap, penalty_lam);
+
+        spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", patch_id, k, wP_kap, wP_lam);
+        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geom_p, F_patch, MrInv_p, kappa_pv_s,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        Vr_p = sparse_gauss_newton_FixKap_OptLam_Penalty(geom_p, targetV_p, Vr_p, MrInv_p,
+            lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx_p,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
+            E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+
+        distance = (Vr_p - targetV_p).squaredNorm() / nV_p;
+        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
+        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+        spdlog::info("Patch {} Stage {}, OptLam finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
+                     patch_id, k, distance, penalty_kap, penalty_lam);
+
+        // Evaluate projected distance
+        {
+            FaceData<double> kappa_pf_proj(mesh_p);
+            FaceData<double> lambda_pf_proj(mesh_p);
+
+            for (Face f : mesh_p.faces()) {
+                double sum = 0.0; int cnt = 0;
+                for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
+                double kap = sum / cnt;
+                double lam = lambda_pf_s[f];
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+                kappa_pf_proj[f] = ac.feasible_kapp[idx];
+                lambda_pf_proj[f] = ac.feasible_lamb[idx];
+            }
+
+            auto simFunc_proj = simulationFunction(geom_p, MrInv_p, lambda_pf_proj, kappa_pf_proj,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+            Eigen::MatrixXd Vr_proj = Vr_p;
+            newton(geom_p, Vr_proj, simFunc_proj,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx_p);
+            double dist_proj = (Vr_proj - targetV_p).squaredNorm() / nV_p;
+
+            spdlog::info("Patch {} Stage {}, Projected distance: {:.6f}", patch_id, k, dist_proj);
+        }
+
+        k++;
+        if (penalty_kap >= penalty_threshold) {
+            wP_kap *= 2.0;
+        }
+        if (penalty_lam >= penalty_threshold) {
+            wP_lam *= 2.0;
+        }
+
+        wM_kap = std::max(wM_kap * 0.5, wM_kap_init * 1e-3);
+        wL_kap = std::max(wL_kap * 0.5, wL_kap_init * 1e-3);
+        wM_lam = std::max(wM_lam * 0.5, wM_lam_init * 1e-3);
+        wL_lam = std::max(wL_lam * 0.5, wL_lam_init * 1e-3);
+
+        if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+            break;
+    }
+
+    // Material projection + forward verification for this patch
+    spdlog::info("Patch {}: Material projection + forward verification.", patch_id);
+
+    FaceData<double> kappa_pf_final(mesh_p);
+    FaceData<double> lambda_pf_final(mesh_p);
+    FaceData<double> t1_pf(mesh_p);
+    FaceData<double> t2_pf(mesh_p);
+
+    for (Face f : mesh_p.faces()) {
+        double kap_sum = 0.0;
+        int cnt = 0;
+        for (Vertex v : f.adjacentVertices()) {
+            kap_sum += kappa_pv_s[v];
+            cnt++;
+        }
+        double kap_f = kap_sum / cnt;
+        double lam_f = lambda_pf_s[f];
+
+        int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap_f, lam_f);
+        kappa_pf_final[f] = ac.feasible_kapp[idx];
+        lambda_pf_final[f] = ac.feasible_lamb[idx];
+        t1_pf[f] = ac.feasible_t_vals[idx].first;
+        t2_pf[f] = ac.feasible_t_vals[idx].second;
+    }
+
+    // Forward simulation with projected material
+    auto simFunc_final = simulationFunction(geom_p, MrInv_p, lambda_pf_final, kappa_pf_final,
+        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+    Eigen::MatrixXd Vr_final = Vr_p;
+    newton(geom_p, Vr_final, simFunc_final,
+        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, true, fixedIdx_p);
+
+    double dist_final = (Vr_final - targetV_p).squaredNorm() / nV_p;
+    spdlog::info("Patch {}: Final projected distance: {:.6f}", patch_id, dist_final);
+
+    // Write per-patch OBJ (projected shape)
+    {
+        std::string patch_proj_path = morphDir + "patch_" + std::to_string(patch_id) + "_proj.obj";
+        igl::writeOBJ(patch_proj_path, Vr_final, F_patch);
+        spdlog::info("Patch {}: Projected shape written to: {}", patch_id, patch_proj_path);
+    }
+
+    // Map results back to global arrays
+    int local_fid = 0;
+    for (Face f : mesh_p.faces()) {
+        int gfid = global_face_ids[local_fid];
+        global_t1[gfid] = t1_pf[f];
+        global_t2[gfid] = t2_pf[f];
+
+        double lam_f = lambda_pf_s[f];
+        double kap_sum = 0.0; int cnt = 0;
+        for (Vertex v : f.adjacentVertices()) { kap_sum += kappa_pv_s[v]; cnt++; }
+        double kap_f = kap_sum / cnt;
+        double lam_excess = std::max(0.0, std::max(lam_f - ac.range_lam.y, ac.range_lam.x - lam_f));
+        double kap_excess = std::max(0.0, std::max(kap_f - ac.range_kap.y, ac.range_kap.x - kap_f));
+
+        global_lam_excess[gfid] = lam_excess;
+        global_kap_excess[gfid] = kap_excess;
+        local_fid++;
+    }
+
+    spdlog::info("=== Patch {} inverse design complete ===", patch_id);
+}
+
+
+/// Per-patch inverse design mode: loads segmentation, runs inverse design on each patch,
+/// merges results back to global mesh for output.
+static int runPerPatchMode(
+    const Config& config,
+    ActiveComposite& ac,
+    const Eigen::MatrixXd& V_global,
+    const Eigen::MatrixXi& F_global,
+    const std::string& segid_path,
+    const std::string& morphDir,
+    const std::string& designDir,
+    const std::string& metricsDir)
+{
+    using namespace geometrycentral;
+    using namespace geometrycentral::surface;
+
+    int nF_global = F_global.rows();
+
+    // Load segmentation
+    std::vector<int> seg_id = loadSegId(segid_path);
+    if ((int)seg_id.size() != nF_global) {
+        spdlog::error("seg_id size ({}) != mesh face count ({})", seg_id.size(), nF_global);
+        return -1;
+    }
+
+    int num_patches = *std::max_element(seg_id.begin(), seg_id.end()) + 1;
+    spdlog::info("Per-patch mode: {} patches detected.", num_patches);
+
+    double platewidth = config.RuntimeSetting.Platewidth;
+
+    // Scale global mesh to platewidth (same as whole-mesh mode)
+    Eigen::MatrixXd V_scaled = V_global;
+    double scaleFactor = platewidth / (V_scaled.colwise().maxCoeff() - V_scaled.colwise().minCoeff()).maxCoeff();
+    V_scaled *= scaleFactor;
+
+    // Global output arrays
+    Eigen::VectorXd global_t1 = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd global_t2 = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd global_lam_excess = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd global_kap_excess = Eigen::VectorXd::Zero(nF_global);
+
+    // Write target mesh
+    {
+        Eigen::MatrixXd V_targ = V_scaled * (1.0 / scaleFactor);
+        std::string output_mesh_targ_path = config.OutputSetting.OutputPath +
+            config.ModelSetting.ModelName + "_targ.obj";
+        igl::writeOBJ(output_mesh_targ_path, V_targ, F_global);
+        igl::writeOBJ(morphDir + config.ModelSetting.ModelName + "_targ.obj", V_targ, F_global);
+    }
+
+    // Process each patch
+    for (int pid = 0; pid < num_patches; ++pid) {
+        PatchData patch = extractPatch(V_scaled, F_global, seg_id, pid);
+        if (patch.F.rows() == 0) {
+            spdlog::warn("Patch {} has 0 faces, skipping.", pid);
+            continue;
+        }
+        spdlog::info("Patch {}: {} faces, {} vertices", pid, patch.F.rows(), patch.V.rows());
+
+        // Parameterize the patch
+        Eigen::MatrixXi F_p = patch.F;
+        int nF_orig = F_p.rows();
+
+        // Fill holes for parameterization (boundary patches need this)
+        std::vector<int> boundary = fillInHoles(patch.V, F_p);
+        Eigen::MatrixXd P_p = tutteEmbedding(patch.V, F_p, boundary);
+
+        LocalGlobalSolver solver(patch.V, F_p);
+        solver.solve(P_p, 1.0 / ac.range_lam.y, 1.0 / ac.range_lam.x);
+        centerAndRotate(patch.V, P_p);
+
+        // Restore original face count (remove filled-in faces)
+        F_p.conservativeResize(nF_orig, 3);
+
+        // Second scaling: fit parameterization to platewidth
+        double s2 = platewidth / (P_p.colwise().maxCoeff() - P_p.colwise().minCoeff()).maxCoeff();
+        Eigen::MatrixXd V_p = patch.V * s2;
+        P_p *= s2;
+
+        // Output per-patch parameterized mesh for Abaqus
+        {
+            Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(P_p.rows(), 3);
+            P_3d.col(0) = P_p.col(0);
+            P_3d.col(1) = P_p.col(1);
+            std::string param_path = morphDir + "patch_" + std::to_string(pid) + "_param.obj";
+            igl::writeOBJ(param_path, P_3d, F_p);
+            spdlog::info("Patch {} param mesh written to: {}", pid, param_path);
+        }
+
+        // Run inverse design on this patch
+        runInverseDesignOnPatch(
+            V_p, F_p, P_p,
+            patch.global_face_ids,
+            config, ac, pid,
+            global_t1, global_t2,
+            global_lam_excess, global_kap_excess,
+            morphDir);
+    }
+
+    // Output merged material file
+    {
+        std::string output_material_path = config.OutputSetting.OutputPath +
+            config.ModelSetting.ModelName + "_material.txt";
+        std::string design_material_path = designDir + config.ModelSetting.ModelName + "_material.txt";
+
+        auto writeMaterial = [&](const std::string& path) {
+            std::ofstream ofs(path);
+            ofs << "# face_id  t1  t2\n";
+            for (int fid = 0; fid < nF_global; ++fid) {
+                ofs << fid << "  " << global_t1[fid] << "  " << global_t2[fid] << "\n";
+            }
+        };
+        writeMaterial(output_material_path);
+        writeMaterial(design_material_path);
+        spdlog::info("Merged material file written to: {} and {}", output_material_path, design_material_path);
+    }
+
+    // Output per-face metrics for warm-start
+    {
+        std::string metrics_path = metricsDir + "metrics.txt";
+        std::ofstream ofs(metrics_path);
+        ofs << "# face_id  lambda_excess  kappa_excess\n";
+        for (int fid = 0; fid < nF_global; ++fid) {
+            ofs << fid << "  " << global_lam_excess[fid] << "  " << global_kap_excess[fid] << "\n";
+        }
+        spdlog::info("Merged metrics written to: {}", metrics_path);
+    }
+
+    return 0;
+}
+
 
 int main(int argc, char* argv[])
 {
@@ -82,6 +454,20 @@ int main(int argc, char* argv[])
         nF = F.rows();
     }
 
+    ///***************************************** Check for per-patch mode *****************************************///
+
+    std::string segid_path = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+    if (std::filesystem::exists(segid_path)) {
+        spdlog::info("Segmentation file found: {}. Running per-patch inverse design.", segid_path);
+        int ret = runPerPatchMode(config, ac, V, F, segid_path, morphDir, designDir, metricsDir);
+        spdlog::info("program finish.");
+        return ret;
+    }
+
+    spdlog::info("No segmentation file found at: {}. Running whole-mesh mode.", segid_path);
+
+    ///***************************************** Whole-mesh mode (original pipeline) *****************************************///
+
     double scaleFactor = 1.0;
     double scaleFactor_1 = config.RuntimeSetting.Platewidth / (V.colwise().maxCoeff() - V.colwise().minCoeff()).maxCoeff();
     scaleFactor *= scaleFactor_1;
@@ -108,6 +494,14 @@ int main(int argc, char* argv[])
     std::vector<bool> boundary_face_flags(nF, false);
     std::vector<int> boundary_ref_indices(nF, 0);
 
+    // Output 2D parameterized mesh (flat domain in platewidth scale) for Abaqus simulation
+    {
+        Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(P.rows(), 3);
+        P_3d.col(0) = P.col(0);
+        P_3d.col(1) = P.col(1);
+        igl::writeOBJ(morphDir + config.ModelSetting.ModelName + "_param.obj", P_3d, F);
+        spdlog::info("Parameterized mesh written to: {}", morphDir + config.ModelSetting.ModelName + "_param.obj");
+    }
 
     ///***************************************** Material Settings *****************************************///
 
@@ -134,7 +528,7 @@ int main(int argc, char* argv[])
 	// Morphmesh::RestrictRange(morph_mesh.kappa_pv_s, ac.range_kap.x, ac.range_kap.y);
     // Morphmesh::RestrictRange(morph_mesh.lambda_pf_s, ac.range_lam.x, ac.range_lam.y);
     // Morphmesh::RestrictRange(morph_mesh.kappa_pf_s, ac.range_kap.x, ac.range_kap.y);
- 
+
 
     auto V_targ= V;
     V_targ *= 1.0 / scaleFactor;
@@ -160,19 +554,19 @@ int main(int argc, char* argv[])
     auto V_pred = V, Vr = V;
 
     // auto simul_func_2 = simulationFunction(geometry,
-    //     MrInv, 
+    //     MrInv,
     //     lambda_pv_s,
-    //     kappa_pv_s, 
+    //     kappa_pv_s,
 	// 	E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b
     //     );
 
     // Vr = V;
-    // newton(geometry, Vr, simul_func_2, config.RuntimeSetting.MaxIter, 
+    // newton(geometry, Vr, simul_func_2, config.RuntimeSetting.MaxIter,
     //     config.RuntimeSetting.epsilon, true, fixedIdx);
 
     // V_pred = Vr;
     // V_pred *= 1.0 / scaleFactor;
-    // std::string output_mesh_pred_path_2 = config.OutputSetting.OutputPath + 
+    // std::string output_mesh_pred_path_2 = config.OutputSetting.OutputPath +
     //     config.ModelSetting.ModelName + "_pred" + ".obj";
     // igl::writeOBJ(output_mesh_pred_path_2, V_pred, F);
 
@@ -380,7 +774,7 @@ int main(int argc, char* argv[])
 
 
 
-    ///***************************************** View by Imgui *****************************************///               
+    ///***************************************** View by Imgui *****************************************///
     //igl::opengl::glfw::Viewer viewer;
     //viewer.data().set_mesh(V_pred, F);
     ////viewer.data().set_colors(C);
@@ -390,4 +784,3 @@ int main(int argc, char* argv[])
     spdlog::info("program finish.");
 
 }
-

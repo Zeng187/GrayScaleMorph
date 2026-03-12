@@ -14,6 +14,7 @@ public:
     {
         std::string ResourcePath;
         std::string MaterialPath;
+        std::string SegmentPath;
     }ResourceSetting;
     struct
     {

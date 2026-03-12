@@ -2,6 +2,7 @@
 #include <igl/readOBJ.h>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -11,6 +12,7 @@
 #include <geometrycentral/surface/manifold_surface_mesh.h>
 #include <geometrycentral/surface/vertex_position_geometry.h>
 
+#include "config.hpp"
 #include "patch_utils.h"
 #include "material.hpp"
 #include "parameterization.h"
@@ -22,16 +24,15 @@ int main(int argc, char* argv[])
     using namespace geometrycentral;
     using namespace geometrycentral::surface;
 
-    if (argc < 5) {
-        std::cerr << "Usage: PatchMetrics <mesh.obj> <seg_id.txt> <material.json> <output_metrics.txt> [platewidth]\n";
-        return 1;
-    }
+    Config config("cfg.json");
 
-    std::string mesh_path    = argv[1];
-    std::string segid_path   = argv[2];
-    std::string material_path = argv[3];
-    std::string output_path  = argv[4];
-    double platewidth = (argc > 5) ? std::stod(argv[5]) : 40.0;
+    std::string mesh_path     = config.ModelSetting.InputPath + config.ModelSetting.ModelName + config.ModelSetting.Postfix;
+    std::string segid_path    = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+    std::string material_path = config.ResourceSetting.MaterialPath;
+    std::string output_path   = config.OutputSetting.MetricsPath + config.ModelSetting.ModelName + "/metrics.txt";
+    double platewidth         = config.RuntimeSetting.Platewidth;
+
+    std::filesystem::create_directories(config.OutputSetting.MetricsPath + config.ModelSetting.ModelName);
 
     // 1. Load mesh
     Eigen::MatrixXd V;

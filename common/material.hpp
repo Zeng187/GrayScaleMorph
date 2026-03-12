@@ -185,6 +185,8 @@ public:
 	M_Poly_Curve m_strain_curve;
 	M_Poly_Curve m_moduls_curve;
 
+	bool curves_loaded = false;
+	std::string material_file_path;
 };
 
 class ActiveComposite: public Grayscale_Material

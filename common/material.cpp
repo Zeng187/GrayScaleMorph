@@ -39,37 +39,67 @@ static Eigen::VectorXd polyfit(const Eigen::VectorXd& x_vals, const Eigen::Vecto
 
 Grayscale_Material::Grayscale_Material(const std::string& filePath)
 {
+    material_file_path = filePath;
     std::ifstream file(filePath);
     if (!file.is_open())
     {
-        spdlog::error("Material file not found!");
+        spdlog::error("Material file not found: {}", filePath);
         exit(1);
     }
 
     json j;
     file >> j;
 
+    // Detect format: curves JSON (from MaterialGen) vs raw material JSON
+    if (j.contains("strain_curve") && j.contains("modulus_curve")) {
+        // ---- MaterialGen curves JSON: directly load pre-computed curves ----
+        name = j.value("name", "");
+        description = j.value("description", "");
+        thickness = j["thickness"];
+        count = j["count"];
+        t_vals = j["t_vals"].get<std::vector<double>>();
 
-    auto& m = j["materials"];
+        // Load pre-fitted polynomial curves
+        auto& sc = j["strain_curve"];
+        m_strain_curve.coeffs = sc["coeffs"].get<std::vector<double>>();
+        m_strain_curve.order = (int)m_strain_curve.coeffs.size();
 
-    name = m["name"];
-    description = m["description"];
-    thickness = m["thickness"];
-    count = m["count"];
-    youngs_modulus = m["youngs_modulus"].get<std::vector<double>>();
-    strech_ratio = m["strech_ratio"].get<std::vector<double>>();
+        auto& mc = j["modulus_curve"];
+        m_moduls_curve.coeffs = mc["coeffs"].get<std::vector<double>>();
+        m_moduls_curve.order = (int)m_moduls_curve.coeffs.size();
 
-    assert(youngs_modulus.size() == strech_ratio.size());
-    assert(strech_ratio.size() ==count);
-    // process
-    for(auto &s: strech_ratio)
-        s = s * 0.01;
+        // Reconstruct strech_ratio and youngs_modulus from curves for range computation
+        strech_ratio.resize(count);
+        youngs_modulus.resize(count);
+        for (int i = 0; i < count; i++) {
+            strech_ratio[i] = eval_poly(m_strain_curve, t_vals[i]);
+            youngs_modulus[i] = eval_poly(m_moduls_curve, t_vals[i]);
+        }
 
-	t_vals.resize(count);
-    for (int i = 0; i < count; i++)
-        t_vals[i] = (double)i / (count - 1);
+        curves_loaded = true;
+        spdlog::info("Loaded curves JSON from {}", filePath);
+    } else {
+        // ---- Raw material JSON: need to polyfit later ----
+        auto& m = j["materials"];
+        name = m["name"];
+        description = m.value("description", "");
+        thickness = m["thickness"];
+        count = m["count"];
+        youngs_modulus = m["youngs_modulus"].get<std::vector<double>>();
+        strech_ratio = m["strech_ratio"].get<std::vector<double>>();
 
-    spdlog::info("Material file found in {0}",filePath);
+        assert(youngs_modulus.size() == strech_ratio.size());
+        assert((int)strech_ratio.size() == count);
+        for (auto& s : strech_ratio)
+            s = s * 0.01;
+
+        t_vals.resize(count);
+        for (int i = 0; i < count; i++)
+            t_vals[i] = (double)i / (count - 1);
+
+        curves_loaded = false;
+        spdlog::info("Loaded raw material JSON from {}", filePath);
+    }
 }
 
 
@@ -122,6 +152,11 @@ void plot_points(igl::opengl::glfw::Viewer& viewer, const std::vector<double>& x
 
 void Grayscale_Material::ComputeMaterialCurve()
 {
+    if (curves_loaded) {
+        spdlog::info("Material curves already loaded from JSON, skipping polyfit.");
+        return;
+    }
+
     if (count <= 1)
         return;
 
@@ -171,19 +206,60 @@ void Grayscale_Material::ComputeMaterialCurve()
 
 ActiveComposite::ActiveComposite(const std::string& filePath):Grayscale_Material(filePath)
 {
-    double strain_min = *std::min_element(strech_ratio.begin(), strech_ratio.end());
-    double strain_max = *std::max_element(strech_ratio.begin(), strech_ratio.end());
+    if (curves_loaded) {
+        // Read ranges directly from curves JSON
+        std::ifstream file(material_file_path);
+        json j;
+        file >> j;
+        if (j.contains("ranges")) {
+            auto& r = j["ranges"];
+            auto lam_range = r["lambda"].get<std::vector<double>>();
+            auto kap_range = r["kappa"].get<std::vector<double>>();
+            range_lam = double2{ lam_range[0], lam_range[1] };
+            range_kap = double2{ kap_range[0], kap_range[1] };
+        }
+        spdlog::info("Loaded ranges from curves JSON: lambda=[{}, {}], kappa=[{}, {}]",
+            range_lam.x, range_lam.y, range_kap.x, range_kap.y);
+    } else {
+        double strain_min = *std::min_element(strech_ratio.begin(), strech_ratio.end());
+        double strain_max = *std::max_element(strech_ratio.begin(), strech_ratio.end());
 
-    range_lam = double2{ 1 + strain_min,1 + strain_max };
+        range_lam = double2{ 1 + strain_min, 1 + strain_max };
 
-    double _kappa_ = 1.5 * (strain_max - strain_min) / thickness;
+        double _kappa_ = 1.5 * (strain_max - strain_min) / thickness;
 
-    range_kap = double2{ -_kappa_, _kappa_};
+        range_kap = double2{ -_kappa_, _kappa_ };
+    }
 }
 
 
 void ActiveComposite::ComputeFeasibleVals()
 {
+    if (curves_loaded) {
+        // Load feasible set directly from curves JSON
+        std::ifstream file(material_file_path);
+        json j;
+        file >> j;
+        if (j.contains("feasible_set")) {
+            auto& fs = j["feasible_set"];
+            fesasible_cnt = (int)fs.size();
+            feasible_t_vals.resize(fesasible_cnt);
+            feasible_lamb.resize(fesasible_cnt);
+            feasible_kapp.resize(fesasible_cnt);
+            feasible_modl.resize(fesasible_cnt);
+
+            for (int i = 0; i < fesasible_cnt; i++) {
+                feasible_t_vals[i] = std::pair<double,double>(fs[i]["t1"].get<double>(), fs[i]["t2"].get<double>());
+                feasible_lamb[i] = fs[i]["lambda"].get<double>();
+                feasible_kapp[i] = fs[i]["kappa"].get<double>();
+                feasible_modl[i] = fs[i]["E"].get<double>();
+            }
+            spdlog::info("Loaded {} feasible values from curves JSON.", fesasible_cnt);
+            return;
+        }
+    }
+
+    // Compute from curves (original path)
     fesasible_cnt = count * count;
     feasible_t_vals.resize(fesasible_cnt);
     feasible_lamb.resize(fesasible_cnt);
@@ -208,5 +284,4 @@ void ActiveComposite::ComputeFeasibleVals()
             feasible_modl[id] = mol;
         }
     }
-
 }

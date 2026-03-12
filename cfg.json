@@ -1,18 +1,19 @@
 {
 	"Resource": {
-		"ResourcePath": [ "../../Resources/" ],
-		"MaterialPath": [ "../../Resources/materials/grayscale-material.json" ]
+		"ResourcePath": [ "../Resources/" ],
+		"MaterialPath": [ "../Resources/materials/grayscale-material-poly-curves.json" ],
+		"SegmentPath": [ "../Resources/segment/" ]
 	},
 	"Model": {
-		"ModelName": [ "hemisphere" ],
+		"ModelName": [ "ear" ],
 		"Postfix": [ ".obj" ],
-		"InputPath": [ "../../Resources/meshes/" ]
+		"InputPath": [ "../Resources/meshes/" ]
 	},
 	"OutputSettings": {
-		"OutputPath": [ "../outputs/" ],
-		"MorphPath": [ "../../Resources/morph/" ],
-		"DesignPath": [ "../../Resources/design/" ],
-		"MetricsPath": [ "../../Resources/metrics/" ],
+		"OutputPath": [ "./outputs/" ],
+		"MorphPath": [ "../Resources/morph/" ],
+		"DesignPath": [ "../Resources/design/" ],
+		"MetricsPath": [ "../Resources/metrics/" ],
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {
