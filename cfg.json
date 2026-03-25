@@ -2,10 +2,12 @@
 	"Resource": {
 		"ResourcePath": [ "../Resources/" ],
 		"MaterialPath": [ "../Resources/materials/grayscale-material-poly-curves.json" ],
-		"SegmentPath": [ "../Resources/segment/" ]
+		"SegmentPath": [ "../Resources/segment/" ],
+		"DistortionMethod": [ "" ],
+		"Plan": [ "" ]
 	},
 	"Model": {
-		"ModelName": [ "ear" ],
+		"ModelName": [ "hemisphere" ],
 		"Postfix": [ ".obj" ],
 		"InputPath": [ "../Resources/meshes/" ]
 	},

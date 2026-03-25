@@ -15,7 +15,14 @@ public:
         std::string ResourcePath;
         std::string MaterialPath;
         std::string SegmentPath;
+        std::string DistortionMethod;
+        std::string Plan;
     }ResourceSetting;
+
+    /// Build the segment directory for a given model name.
+    /// Appends _{method} if DistortionMethod is non-empty, and _{plan} if Plan is non-empty.
+    /// e.g. SegmentPath + "bird_yamabe_planB/" vs SegmentPath + "bird/"
+    std::string segmentDir(const std::string& modelName) const;
     struct
     {
         std::string ModelName;

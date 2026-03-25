@@ -36,6 +36,99 @@
 
 #define __Add_PENALTY__
 
+/// Compute the optimal gauge scale t* for ASAP parameterization.
+/// Solves: t* = argmin_t  Σ A_f · (t·λ_f − clamp(t·λ_f, λ_min, λ_max))²
+/// After calling, scale P /= t* so that λ → t*·λ moves into the material window.
+static double computeGaugeShiftScale(
+    const Eigen::MatrixXd& V,
+    const Eigen::MatrixXi& F,
+    const Eigen::MatrixXd& P,
+    double lambda_min,
+    double lambda_max)
+{
+    const int nF = F.rows();
+    Eigen::VectorXd lambda_raw = Eigen::VectorXd::Ones(nF);
+    Eigen::VectorXd face_area = Eigen::VectorXd::Zero(nF);
+
+    for (int fi = 0; fi < nF; ++fi) {
+        Eigen::Vector3d v0 = V.row(F(fi, 0));
+        Eigen::Vector3d v1 = V.row(F(fi, 1));
+        Eigen::Vector3d v2 = V.row(F(fi, 2));
+        Eigen::Matrix<double, 3, 2> M;
+        M.col(0) = v1 - v0;
+        M.col(1) = v2 - v0;
+
+        Eigen::Vector2d p0 = P.row(F(fi, 0));
+        Eigen::Vector2d p1 = P.row(F(fi, 1));
+        Eigen::Vector2d p2 = P.row(F(fi, 2));
+        Eigen::Matrix2d Mr;
+        Mr.col(0) = p1 - p0;
+        Mr.col(1) = p2 - p0;
+
+        const double det_Mr = Mr.determinant();
+        face_area(fi) = 0.5 * std::abs(det_Mr);
+
+        if (std::abs(det_Mr) < 1e-16) {
+            lambda_raw(fi) = 1.0;
+            continue;
+        }
+
+        Eigen::Matrix<double, 3, 2> Fg = M * Mr.inverse();
+        Eigen::Matrix2d a = Fg.transpose() * Fg;
+        lambda_raw(fi) = std::sqrt(std::max(0.0, 0.5 * a.trace()));
+    }
+
+    // Initial guess: align geometric mean to window center
+    double log_sum = 0.0, area_sum = 0.0;
+    for (int fi = 0; fi < nF; ++fi) {
+        if (lambda_raw(fi) > 0.0 && face_area(fi) > 0.0) {
+            log_sum += face_area(fi) * std::log(lambda_raw(fi));
+            area_sum += face_area(fi);
+        }
+    }
+    if (area_sum <= 0.0) return 1.0;
+
+    const double geom_mean = std::exp(log_sum / area_sum);
+    if (!(geom_mean > 0.0) || !std::isfinite(geom_mean)) return 1.0;
+
+    double t = std::sqrt(lambda_min * lambda_max) / geom_mean;
+    if (!(t > 0.0) || !std::isfinite(t)) return 1.0;
+
+    // Iterative refinement: solve dF/dt = 0 with set partitioning
+    for (int iter = 0; iter < 5; ++iter) {
+        double num = 0.0, den = 0.0;
+        bool any_outside = false;
+
+        for (int fi = 0; fi < nF; ++fi) {
+            const double tl = t * lambda_raw(fi);
+            const double A = face_area(fi);
+            const double l = lambda_raw(fi);
+
+            if (tl < lambda_min) {
+                num += A * l * lambda_min;
+                den += A * l * l;
+                any_outside = true;
+            } else if (tl > lambda_max) {
+                num += A * l * lambda_max;
+                den += A * l * l;
+                any_outside = true;
+            }
+        }
+
+        if (!any_outside || den <= 0.0) break;
+
+        const double t_new = num / den;
+        if (!(t_new > 0.0) || !std::isfinite(t_new)) break;
+        if (std::abs(t_new - t) < 1e-10 * std::max(1.0, std::abs(t))) {
+            t = t_new;
+            break;
+        }
+        t = t_new;
+    }
+
+    return t;
+}
+
 /// Run the full SGN inverse design pipeline on a single mesh piece.
 /// Stores per-face t1, t2 results into global_t1, global_t2 at the given global_face_ids.
 /// Also writes per-face metrics (lambda/kappa excess) into global_lam_excess, global_kap_excess.
@@ -189,7 +282,10 @@ static void runInverseDesignOnPatch(
 
             auto simFunc_proj = simulationFunction(geom_p, MrInv_p, lambda_pf_proj, kappa_pf_proj,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
-            Eigen::MatrixXd Vr_proj = Vr_p;
+            // Start from flat (P_patch, 0) to match physical initial state
+            Eigen::MatrixXd Vr_proj = Eigen::MatrixXd::Zero(P_patch.rows(), 3);
+            Vr_proj.col(0) = P_patch.col(0);
+            Vr_proj.col(1) = P_patch.col(1);
             newton(geom_p, Vr_proj, simFunc_proj,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx_p);
             double dist_proj = (Vr_proj - targetV_p).squaredNorm() / nV_p;
@@ -239,10 +335,12 @@ static void runInverseDesignOnPatch(
         t2_pf[f] = ac.feasible_t_vals[idx].second;
     }
 
-    // Forward simulation with projected material
+    // Forward simulation with projected material — start from flat (P_patch, 0)
     auto simFunc_final = simulationFunction(geom_p, MrInv_p, lambda_pf_final, kappa_pf_final,
         E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
-    Eigen::MatrixXd Vr_final = Vr_p;
+    Eigen::MatrixXd Vr_final = Eigen::MatrixXd::Zero(P_patch.rows(), 3);
+    Vr_final.col(0) = P_patch.col(0);
+    Vr_final.col(1) = P_patch.col(1);
     newton(geom_p, Vr_final, simFunc_final,
         config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, true, fixedIdx_p);
 
@@ -352,6 +450,16 @@ static int runPerPatchMode(
         // Restore original face count (remove filled-in faces)
         F_p.conservativeResize(nF_orig, 3);
 
+        // Gauge shift: position λ distribution into material window [λ_min, λ_max]
+        {
+            const double t = computeGaugeShiftScale(
+                patch.V, F_p, P_p, ac.range_lam.x, ac.range_lam.y);
+            if (t > 0.0 && std::isfinite(t) && std::abs(t - 1.0) > 1e-12) {
+                P_p /= t;
+                spdlog::info("Patch {}: gauge shift t={:.6f}, P scaled by {:.6f}", pid, t, 1.0 / t);
+            }
+        }
+
         // Second scaling: fit parameterization to platewidth
         double s2 = platewidth / (P_p.colwise().maxCoeff() - P_p.colwise().minCoeff()).maxCoeff();
         Eigen::MatrixXd V_p = patch.V * s2;
@@ -460,12 +568,24 @@ int main(int argc, char* argv[])
 
     ///***************************************** Check for per-patch mode *****************************************///
 
-    std::string segid_path = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+    std::string segDir = config.segmentDir(config.ModelSetting.ModelName);
+    std::string segid_path = segDir + "seg_id.txt";
     if (std::filesystem::exists(segid_path)) {
         spdlog::info("Segmentation file found: {}. Running per-patch inverse design.", segid_path);
         int ret = runPerPatchMode(config, ac, V, F, segid_path, morphDir, designDir, metricsDir);
         spdlog::info("program finish.");
         return ret;
+    }
+
+    // Fallback: try plain model name (backward compatibility with old directory layout)
+    if (!config.ResourceSetting.DistortionMethod.empty()) {
+        std::string segid_path_fallback = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+        if (std::filesystem::exists(segid_path_fallback)) {
+            spdlog::info("Segmentation file found at fallback path: {}. Running per-patch inverse design.", segid_path_fallback);
+            int ret = runPerPatchMode(config, ac, V, F, segid_path_fallback, morphDir, designDir, metricsDir);
+            spdlog::info("program finish.");
+            return ret;
+        }
     }
 
     spdlog::info("No segmentation file found at: {}. Running whole-mesh mode.", segid_path);
@@ -485,6 +605,14 @@ int main(int argc, char* argv[])
     spdlog::info("Step 1: Parameterization.");
     Eigen::MatrixXd P = parameterization(V, F, ac.range_lam.x, ac.range_lam.y, 0);
 
+    // Gauge shift: position λ distribution into material window [λ_min, λ_max]
+    {
+        const double t = computeGaugeShiftScale(V, F, P, ac.range_lam.x, ac.range_lam.y);
+        if (t > 0.0 && std::isfinite(t) && std::abs(t - 1.0) > 1e-12) {
+            P /= t;
+            spdlog::info("Whole mesh: gauge shift t={:.6f}, P scaled by {:.6f}", t, 1.0 / t);
+        }
+    }
 
     double scaleFactor_2 = config.RuntimeSetting.Platewidth / (P.colwise().maxCoeff() - P.colwise().minCoeff()).maxCoeff();
     scaleFactor *= scaleFactor_2;
@@ -652,7 +780,10 @@ int main(int argc, char* argv[])
 
             auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
-            Eigen::MatrixXd Vr_proj = Vr;
+            // Start from flat (P, 0) to match physical initial state
+            Eigen::MatrixXd Vr_proj = Eigen::MatrixXd::Zero(P.rows(), 3);
+            Vr_proj.col(0) = P.col(0);
+            Vr_proj.col(1) = P.col(1);
             newton(geometry, Vr_proj, simFunc_proj,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
             double dist_proj = (Vr_proj - targetV).squaredNorm() / nV;
@@ -710,10 +841,13 @@ int main(int argc, char* argv[])
         t2_pf[f] = ac.feasible_t_vals[idx].second;
     }
 
-    // Step 5b: Forward simulation with projected material
+    // Step 5b: Forward simulation with projected material (start from flat)
     auto simFunc_final = simulationFunction(geometry, MrInv, lambda_pf_final, kappa_pf_final,
         E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
-    Eigen::MatrixXd Vr_final = Vr;
+    // Start from flat (P, 0) to match physical initial state (Abaqus starts from flat sheet)
+    Eigen::MatrixXd Vr_final = Eigen::MatrixXd::Zero(P.rows(), 3);
+    Vr_final.col(0) = P.col(0);
+    Vr_final.col(1) = P.col(1);
     newton(geometry, Vr_final, simFunc_final,
         config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, true, fixedIdx);
 
@@ -721,6 +855,13 @@ int main(int argc, char* argv[])
     spdlog::info("Final projected distance: {:.6f}", dist_final);
 
     // Step 5c: Output projected shape
+    spdlog::info("scaleFactor = {} (s1={}, s2={})", scaleFactor, scaleFactor_1, scaleFactor_2);
+
+    // Output in platewidth scale (same coordinate system as _param.obj and Abaqus)
+    igl::writeOBJ(morphDir + config.ModelSetting.ModelName + "_proj_pw.obj", Vr_final, F);
+    spdlog::info("Projected shape (platewidth scale) written to: {}",
+        morphDir + config.ModelSetting.ModelName + "_proj_pw.obj");
+
     Eigen::MatrixXd V_proj = Vr_final;
     V_proj *= 1.0 / scaleFactor;
     std::string output_mesh_proj_path = config.OutputSetting.OutputPath +

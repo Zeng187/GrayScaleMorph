@@ -91,17 +91,16 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
     const geometrycentral::surface::FaceData<double>& lambda,
     const geometrycentral::surface::FaceData<double>& kappa,
+    double h,
     const Eigen::MatrixXd& V,
     const Eigen::MatrixXi& F,
     Eigen::VectorXd& Ws_density,
     Eigen::VectorXd& Wb_density)
 {
-
     SurfaceMesh& mesh = geometry.mesh;
 
     const double alpha = E * nu / (1 - nu * nu);
     const double beta = E / (2 * (1 + nu));
-
 
     for (Face f : mesh.faces())
     {
@@ -113,19 +112,19 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
         double lam = lambda[f];
         double kap = kappa[f];
 
-
         Eigen::Vector3d x0 = V.row(x0_idx);
         Eigen::Vector3d x1 = V.row(x1_idx);
         Eigen::Vector3d x2 = V.row(x2_idx);
         Eigen::Matrix<double, 3, 2> M = TinyAD::col_mat(x1 - x0, x2 - x0);
 
         double dA = 0.5 / MrInv[f].determinant();
+        double lam_sqr = lam * lam;
         Eigen::Matrix<double, 3, 2> Fg = M * (MrInv[f]);
         Eigen::Matrix2d a_mat = Fg.transpose() * Fg;
-        Eigen::Matrix2d a_bar_inv = (1.0 / (lam * lam)) * Eigen::Matrix2d::Identity();
-        Eigen::Matrix2d Egreen_a = ((a_bar_inv * a_mat) - Eigen::Matrix2d::Identity());
-        double Ws = ComputeSVNorm(alpha, beta, Egreen_a);
 
+        // Form A: eps_s = a - lambda^2 * I, W_stretch = (1/lambda^2) * W_StVK(eps_s) * dA
+        Eigen::Matrix2d eps_s = a_mat - lam_sqr * Eigen::Matrix2d::Identity();
+        double Ws = ComputeSVNorm(alpha, beta, eps_s) / lam_sqr;
 
         Eigen::Vector3d f_0 = M.col(0);
         Eigen::Vector3d f_1 = M.col(1);
@@ -155,16 +154,14 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
         }
         L /= n.squaredNorm();
 
+        // Form A: eps_b = b - lambda^2 * kappa * I, W_bend = (h^2/3) * (1/lambda^2) * W_StVK(eps_b) * dA
         Eigen::Matrix2d b_mat = Fg.transpose() * L * Fg;
-        Eigen::Matrix2d b_bar = kap * Eigen::Matrix2d::Identity();
-        Eigen::Matrix2d Egreen_b = b_mat - b_bar;
-        double Wb = ComputeSVNorm(alpha, beta, Egreen_b);
+        Eigen::Matrix2d eps_b = b_mat - lam_sqr * kap * Eigen::Matrix2d::Identity();
+        double Wb = ComputeSVNorm(alpha, beta, eps_b) * (h * h / 3.0) / lam_sqr;
 
-        Ws_density[face_id] = Ws;
-        Wb_density[face_id] = Wb;
+        Ws_density[face_id] = Ws * dA;
+        Wb_density[face_id] = Wb * dA;
     };
-
-
 }
 
 
@@ -172,12 +169,12 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
     const geometrycentral::surface::FaceData<double>& lambda,
     const geometrycentral::surface::VertexData<double>& kappa,
+    double h,
     const Eigen::MatrixXd& V,
     const Eigen::MatrixXi& F,
     Eigen::VectorXd& Ws_density,
     Eigen::VectorXd& Wb_density)
 {
-
     SurfaceMesh& mesh = geometry.mesh;
 
     const double alpha = E * nu / (1 - nu * nu);
@@ -199,11 +196,13 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
         Eigen::Matrix<double, 3, 2> M = TinyAD::col_mat(x1 - x0, x2 - x0);
 
         double dA = 0.5 / MrInv[f].determinant();
+        double lam_sqr = lam * lam;
         Eigen::Matrix<double, 3, 2> Fg = M * (MrInv[f]);
         Eigen::Matrix2d a_mat = Fg.transpose() * Fg;
-        Eigen::Matrix2d a_bar_inv = (1.0 / (lam * lam)) * Eigen::Matrix2d::Identity();
-        Eigen::Matrix2d Egreen_a = ((a_bar_inv * a_mat) - Eigen::Matrix2d::Identity());
-        double Ws = ComputeSVNorm(alpha, beta, Egreen_a);
+
+        // Form A: eps_s = a - lambda^2 * I, W_stretch = (1/lambda^2) * W_StVK(eps_s) * dA
+        Eigen::Matrix2d eps_s = a_mat - lam_sqr * Eigen::Matrix2d::Identity();
+        double Ws = ComputeSVNorm(alpha, beta, eps_s) / lam_sqr;
 
         Eigen::Vector3d f_0 = M.col(0);
         Eigen::Vector3d f_1 = M.col(1);
@@ -233,13 +232,13 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
         }
         L /= n.squaredNorm();
 
+        // Form A: eps_b = b - lambda^2 * kappa * I, W_bend = (h^2/3) * (1/lambda^2) * W_StVK(eps_b) * dA
         Eigen::Matrix2d b_mat = Fg.transpose() * L * Fg;
-        Eigen::Matrix2d b_bar = kap * Eigen::Matrix2d::Identity();
-        Eigen::Matrix2d Egreen_b = b_mat - b_bar;
-        double Wb = ComputeSVNorm(alpha, beta, Egreen_b);
+        Eigen::Matrix2d eps_b = b_mat - lam_sqr * kap * Eigen::Matrix2d::Identity();
+        double Wb = ComputeSVNorm(alpha, beta, eps_b) * (h * h / 3.0) / lam_sqr;
 
-        Ws_density[face_id] = Ws;
-        Wb_density[face_id] = Wb;
+        Ws_density[face_id] = Ws * dA;
+        Wb_density[face_id] = Wb * dA;
     };
 }
 

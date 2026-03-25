@@ -22,6 +22,14 @@ Config::Config(const std::string& filePath) {
     ResourceSetting.ResourcePath = r["ResourcePath"][0];
     ResourceSetting.MaterialPath = r["MaterialPath"][0];
     ResourceSetting.SegmentPath = r["SegmentPath"][0];
+    if (r.contains("DistortionMethod") && r["DistortionMethod"][0].is_string())
+        ResourceSetting.DistortionMethod = r["DistortionMethod"][0];
+    else
+        ResourceSetting.DistortionMethod = "";
+    if (r.contains("Plan") && r["Plan"][0].is_string())
+        ResourceSetting.Plan = r["Plan"][0];
+    else
+        ResourceSetting.Plan = "";
 
     auto& m = j["Model"];
     ModelSetting.ModelName = m["ModelName"][0];
@@ -52,4 +60,15 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wP_lam = rt["wP_lam"][0];
     RuntimeSetting.penalty_threshold = rt["penalty_threshold"][0];
     RuntimeSetting.betaP = rt["betaP"][0];
+}
+
+std::string Config::segmentDir(const std::string& modelName) const {
+    std::string dirName = modelName;
+    if (!ResourceSetting.DistortionMethod.empty()) {
+        dirName += "_" + ResourceSetting.DistortionMethod;
+    }
+    if (!ResourceSetting.Plan.empty()) {
+        dirName += "_" + ResourceSetting.Plan;
+    }
+    return ResourceSetting.SegmentPath + dirName + "/";
 }

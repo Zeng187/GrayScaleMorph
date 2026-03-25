@@ -93,8 +93,8 @@ void LocalGlobalSolver::solve(Eigen::Ref<Eigen::MatrixX2d> U, double sMin, doubl
       solveOneStep(U, sMin, sMax);
   else
   {
-    VectorXd s1_prev = VectorXd::Constant(s1.size(), sMin);
-    VectorXd s2_prev = VectorXd::Constant(s2.size(), sMax);
+    VectorXd s1_prev = VectorXd::Zero(s1.size());
+    VectorXd s2_prev = VectorXd::Zero(s2.size());
     solveOneStep(U, sMin, sMax);
     while(std::max((s1 - s1_prev).norm() / s1.size(), (s2 - s2_prev).norm() / s2.size()) > 1e-8)
     {
@@ -127,6 +127,9 @@ void LocalGlobalSolver::solve(Eigen::Ref<Eigen::MatrixX2d> U, double sMin, doubl
 Eigen::Matrix2d LocalGlobalSolver::project(const Eigen::Matrix2d& M, double sMin, double sMax, int i)
 {
   using namespace Eigen;
+  (void)sMin;
+  (void)sMax;
+
   JacobiSVD<Matrix2d> svd;
   svd.compute(M, ComputeFullU | ComputeFullV);
   Matrix2d S = svd.singularValues().asDiagonal();
@@ -137,12 +140,10 @@ Eigen::Matrix2d LocalGlobalSolver::project(const Eigen::Matrix2d& M, double sMin
   stressX.row(i) = svd.matrixU().col(0);
   stressY.row(i) = svd.matrixU().col(1);
 
-
-  //S(1, 1) = sMin;
-  //S(0, 0) = sMax;
+  // Pure ASAP: project to nearest similarity transform (s1 = s2 = avg)
+  // No truncation — gauge shift handles feasibility positioning
   double s_avg = 0.5 * (s1(i) + s2(i));
-  s_avg = std::clamp(s_avg, sMin, sMax);
-   S(1, 1) = S(0, 0) = s_avg;
+  S(1, 1) = S(0, 0) = s_avg;
 
   return svd.matrixU() * S * svd.matrixV().transpose();
 }

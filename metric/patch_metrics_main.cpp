@@ -27,7 +27,16 @@ int main(int argc, char* argv[])
     Config config("cfg.json");
 
     std::string mesh_path     = config.ModelSetting.InputPath + config.ModelSetting.ModelName + config.ModelSetting.Postfix;
-    std::string segid_path    = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+    std::string segDir        = config.segmentDir(config.ModelSetting.ModelName);
+    std::string segid_path    = segDir + "seg_id.txt";
+    // Fallback: try plain model name if method-suffixed dir does not exist
+    if (!std::filesystem::exists(segid_path) && !config.ResourceSetting.DistortionMethod.empty()) {
+        std::string fallback = config.ResourceSetting.SegmentPath + config.ModelSetting.ModelName + "/seg_id.txt";
+        if (std::filesystem::exists(fallback)) {
+            spdlog::info("Using fallback segment path: {}", fallback);
+            segid_path = fallback;
+        }
+    }
     std::string material_path = config.ResourceSetting.MaterialPath;
     std::string output_path   = config.OutputSetting.MetricsPath + config.ModelSetting.ModelName + "/metrics.txt";
     double platewidth         = config.RuntimeSetting.Platewidth;
@@ -63,8 +72,11 @@ int main(int argc, char* argv[])
     }
 
     // 5. Initialize global metrics arrays
-    Eigen::VectorXd stretch_excess = Eigen::VectorXd::Zero(nF_global);
-    Eigen::VectorXd bend_excess    = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd stretch_excess  = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd bend_excess     = Eigen::VectorXd::Zero(nF_global);
+    Eigen::VectorXd energy_residual = Eigen::VectorXd::Zero(nF_global);
+
+    double h = ac.thickness;  // plate thickness for energy weighting
 
     // 6. Determine number of patches
     int num_patches = *std::max_element(seg_id.begin(), seg_id.end()) + 1;
@@ -78,6 +90,9 @@ int main(int argc, char* argv[])
             continue;
         }
         spdlog::info("Patch {}: {} faces, {} vertices", pid, patch.F.rows(), patch.V.rows());
+
+        // Wrap in try-catch: skip patches with non-manifold topology
+        try {
 
         // 7b. Parameterization (material-constrained ASAP)
         Eigen::MatrixXi F_p = patch.F;
@@ -122,20 +137,49 @@ int main(int argc, char* argv[])
             bv_flags, bf_flags, b_ref, MrInv_p,
             lam_pv, lam_pf, kap_pv, kap_pf);
 
-        // 7e. Compute feasibility excess and map back to global
+        // 7e. Compute feasibility excess and energy residual, map back to global
         for (int i = 0; i < nF_p; ++i) {
             double lam = lam_pf[i];
             double kap = kap_pf[i];
+
+            // Linear excess (existing metrics)
             double s_ex = std::max(0.0, lam - ac.range_lam.y)
                         + std::max(0.0, ac.range_lam.x - lam);
             double b_ex = std::max(0.0, std::abs(kap) - ac.range_kap.y);
-            stretch_excess[patch.global_face_ids[i]] = s_ex;
-            bend_excess[patch.global_face_ids[i]]    = b_ex;
+
+            // Clamp to feasible range
+            double lam_clamp = std::clamp(lam, ac.range_lam.x, ac.range_lam.y);
+            double kap_clamp = std::clamp(kap, ac.range_kap.x, ac.range_kap.y);
+
+            // Face area in flat reference domain
+            double A_f = 0.5 / std::abs(MrInv_p[mesh_p.face(i)].determinant());
+
+            // Energy residual: membrane + bending (non-Euclidean plate theory)
+            double dlam = lam - lam_clamp;
+            double dkap = kap - kap_clamp;
+            double e_f = h * dlam * dlam * A_f
+                       + (h * h * h / 12.0) * dkap * dkap * A_f;
+
+            int gid = patch.global_face_ids[i];
+            stretch_excess[gid]  = s_ex;
+            bend_excess[gid]     = b_ex;
+            energy_residual[gid] = e_f;
         }
 
         spdlog::info("  Patch {} done: lambda [{:.4f}, {:.4f}], kappa [{:.4f}, {:.4f}]",
                      pid, lam_pf.minCoeff(), lam_pf.maxCoeff(),
                      kap_pf.minCoeff(), kap_pf.maxCoeff());
+
+        } catch (const std::exception& e) {
+            spdlog::warn("Patch {} failed ({}), marking as max infeasible", pid, e.what());
+            // Mark all faces of this patch with large excess so warm-start will split it
+            for (int i = 0; i < (int)patch.global_face_ids.size(); ++i) {
+                int gid = patch.global_face_ids[i];
+                stretch_excess[gid]  = 1.0;
+                bend_excess[gid]     = 1.0;
+                energy_residual[gid] = 1.0;
+            }
+        }
     }
 
     // 8. Output metrics.txt
@@ -145,20 +189,22 @@ int main(int argc, char* argv[])
         return 1;
     }
     for (int f = 0; f < nF_global; ++f) {
-        ofs << stretch_excess[f] << " " << bend_excess[f] << "\n";
+        ofs << stretch_excess[f] << " " << bend_excess[f] << " " << energy_residual[f] << "\n";
     }
     ofs.close();
 
-    spdlog::info("Wrote metrics to {} ({} faces)", output_path, nF_global);
+    spdlog::info("Wrote metrics to {} ({} faces, 3 columns: stretch_excess bend_excess energy_residual)", output_path, nF_global);
 
     // Summary statistics
     int n_infeasible = 0;
+    double total_energy = 0.0;
     for (int f = 0; f < nF_global; ++f) {
         if (stretch_excess[f] > 0 || bend_excess[f] > 0)
             n_infeasible++;
+        total_energy += energy_residual[f];
     }
-    spdlog::info("Infeasible faces: {}/{} ({:.1f}%)",
-                 n_infeasible, nF_global, 100.0 * n_infeasible / nF_global);
+    spdlog::info("Infeasible faces: {}/{} ({:.1f}%), total residual energy: {:.6e}",
+                 n_infeasible, nF_global, 100.0 * n_infeasible / nF_global, total_energy);
 
     return 0;
 }
