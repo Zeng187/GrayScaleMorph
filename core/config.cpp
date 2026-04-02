@@ -117,25 +117,33 @@ Config::Config(const std::string& filePath)
             segment.plan = jsonGetOr<std::string>(sec, "Plan", "");
     }
 
-    // ── output ───────────────────────────────────────────────────────
+    // ── paths (shared resource directories) ─────────────────────────
     {
-        const auto& sec = findSection(j, {"output", "OutputSettings"});
-        if (sec.contains("output_path"))
-            output.output_path = jsonGet<std::string>(sec, "output_path");
-        else
-            output.output_path = jsonGet<std::string>(sec, "OutputPath");   // legacy
+        // New format: "paths" section. Legacy fallback: "output" / "OutputSettings".
+        const auto& sec = findSection(j, {"paths", "output", "OutputSettings"});
 
-        output.param_path = jsonGetOr<std::string>(sec, "param_path", "../Resources/param/");
+        paths.param_path = jsonGetOr<std::string>(sec, "param_path", "../Resources/param/");
 
         if (sec.contains("morph_path"))
-            output.morph_path = jsonGet<std::string>(sec, "morph_path");
+            paths.morph_path = jsonGet<std::string>(sec, "morph_path");
         else
-            output.morph_path = jsonGet<std::string>(sec, "MorphPath");     // legacy
+            paths.morph_path = jsonGetOr<std::string>(sec, "MorphPath", "../Resources/morph/");
 
         if (sec.contains("design_path"))
-            output.design_path = jsonGet<std::string>(sec, "design_path");
+            paths.design_path = jsonGet<std::string>(sec, "design_path");
         else
-            output.design_path = jsonGet<std::string>(sec, "DesignPath");   // legacy
+            paths.design_path = jsonGetOr<std::string>(sec, "DesignPath", "../Resources/design/");
+
+        if (sec.contains("output_path"))
+            paths.output_path = jsonGet<std::string>(sec, "output_path");
+        else
+            paths.output_path = jsonGetOr<std::string>(sec, "OutputPath", "./outputs/");
+    }
+
+    // ── patch (optional single-patch override) ──────────────────────
+    if (j.contains("patch") && j.at("patch").is_object()) {
+        const auto& sec = j.at("patch");
+        patch.id = jsonGetOr<int>(sec, "id", patch.id);
     }
 
     // ── solver ───────────────────────────────────────────────────────
@@ -157,7 +165,8 @@ Config::Config(const std::string& filePath)
         solver.betaP             = jsonGetOr(sec, "betaP",            solver.betaP);
     }
 
-    spdlog::info("Config: model='{}', mesh='{}'", model.name, model.mesh_path);
+    spdlog::info("Config: model='{}', mesh='{}', patch.id={}",
+                 model.name, model.mesh_path, patch.id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -176,15 +185,15 @@ std::string Config::segmentDir(const std::string& modelName) const
 
 std::string Config::paramDir() const
 {
-    return output.param_path + model.name + "/";
+    return paths.param_path + model.name + "/";
 }
 
 std::string Config::morphDir() const
 {
-    return output.morph_path + model.name + "/";
+    return paths.morph_path + model.name + "/";
 }
 
 std::string Config::designDir() const
 {
-    return output.design_path + model.name + "/";
+    return paths.design_path + model.name + "/";
 }

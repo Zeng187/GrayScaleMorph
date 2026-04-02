@@ -24,15 +24,12 @@ public:
         const Eigen::MatrixXi& F,
         const int &nV,
         const int &nF,
-        const std::vector<bool>& boundary_vertex_flags,
-        const std::vector<bool>& boundary_face_flags,
-        const std::vector<int>& boundary_ref_indices,
         const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
         Eigen::VectorXd& _lambda_pv,
         Eigen::VectorXd& _lambda_pf,
-        Eigen::VectorXd& _kappa_pv ,
+        Eigen::VectorXd& _kappa_pv,
         Eigen::VectorXd& _kappa_pf,
-        Eigen::VectorXd* vertex_area_sum_out = nullptr );
+        Eigen::VectorXd* vertex_area_sum_out = nullptr);
 
     static void SetMorphophing(
         const Eigen::VectorXd& _lambda_pv_t,

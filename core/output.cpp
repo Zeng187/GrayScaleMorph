@@ -110,14 +110,14 @@ void write_output_vtk(const std::string& filename,
     out_file << "CELL_DATA " << f_n << "\n";
 
 
-
+    // д��ο� metric a_comps
     out_file << "VECTORS acomps_components double" << "\n";
     for (int t = 0; t < f_n; ++t)
     {
         out_file << a_comps(t, 0) << " " << a_comps(t, 1) << " " << a_comps(t, 2) << "\n";
     }
 
-   
+    // д��ο����� b_comps��vector��
     out_file << "VECTORS bcomps_components double" << "\n";
     for (int t = 0; t < f_n; ++t)
     {
@@ -174,7 +174,7 @@ void write_output_vtk(const std::string& filename,
 
     out_file << "CELL_DATA " << f_n << "\n";
 
-
+    // lambda��1 component��
     out_file << "SCALARS lambda double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -182,7 +182,7 @@ void write_output_vtk(const std::string& filename,
         out_file << lambda(t) << "\n";
     }
 
-
+    // lambda��1 component��
     out_file << "SCALARS kappa double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -190,14 +190,14 @@ void write_output_vtk(const std::string& filename,
         out_file << kappa(t) << "\n";
     }
 
-
+    // д��ο� metric a_comps
     out_file << "VECTORS acomps_components double" << "\n";
     for (int t = 0; t < f_n; ++t)
     {
         out_file << a_comps(t, 0) << " " << a_comps(t, 1) << " " << a_comps(t, 2) << "\n";
     }
 
-
+    // д��ο����� b_comps��vector��
     out_file << "VECTORS bcomps_components double" << "\n";
     for (int t = 0; t < f_n; ++t)
     {
@@ -256,6 +256,7 @@ void write_output_vtk(const std::string& filename,
 
     out_file << "CELL_DATA " << f_n << "\n";
 
+    // lambda��1 component��
     out_file << "SCALARS lambda double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -263,6 +264,7 @@ void write_output_vtk(const std::string& filename,
         out_file << lambda(t) << "\n";
     }
 
+    // lambda��1 component��
     out_file << "SCALARS kappa double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -270,6 +272,7 @@ void write_output_vtk(const std::string& filename,
         out_file << kappa(t) << "\n";
     }
 
+    // lambda��1 component��
     out_file << "SCALARS lambda_diff double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -277,6 +280,7 @@ void write_output_vtk(const std::string& filename,
         out_file << lambda_diff(t) << "\n";
     }
 
+    // lambda��1 component��
     out_file << "SCALARS kappa_diff double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -285,6 +289,7 @@ void write_output_vtk(const std::string& filename,
     }
 
 
+    // Ws_density��1 component��
     out_file << "SCALARS stretching_energy_density double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -292,6 +297,7 @@ void write_output_vtk(const std::string& filename,
         out_file << Ws_density(t) << "\n";
     }
 
+    // lambda��1 component��
     out_file << "SCALARS bending_energy_density double 1\n"
         << "LOOKUP_TABLE default\n";
     for (int t = 0; t < f_n; ++t)
@@ -684,4 +690,56 @@ void write_output_vtk(const std::string& filename,
     }
 
     file.close();
+}
+
+
+void write_output_vtk_perface(
+    const std::string& filename,
+    const Eigen::MatrixXd& V,
+    const Eigen::MatrixXi& F,
+    const std::vector<Eigen::VectorXd>& per_face_attributes_list,
+    const std::vector<std::string>& per_face_attributes_string_list)
+{
+    if (per_face_attributes_list.size() != per_face_attributes_string_list.size())
+        throw std::runtime_error("Attributes list and names list size mismatch.");
+
+    std::ofstream out_file(filename, std::ofstream::out);
+    if (!out_file)
+        throw std::runtime_error("Error: Problem creating or opening vtk output file.");
+
+    const int v_n = static_cast<int>(V.rows());
+    const int f_n = static_cast<int>(F.rows());
+    const int v_dim = static_cast<int>(V.cols());
+    const int f_cols = static_cast<int>(F.cols());
+
+    out_file << std::scientific << std::setprecision(14)
+             << "# vtk DataFile Version 4.2\n"
+             << "VTK per-face attributes\n"
+             << "ASCII\n"
+             << "DATASET POLYDATA\n";
+
+    out_file << "POINTS " << v_n << " double\n";
+    for (int n = 0; n < v_n; ++n)
+        out_file << V(n, 0) << " " << V(n, 1) << " " << (v_dim == 3 ? V(n, 2) : 0.0) << "\n";
+
+    out_file << "POLYGONS " << f_n << " " << (f_cols + 1) * f_n << "\n";
+    for (int n = 0; n < f_n; ++n) {
+        out_file << f_cols;
+        for (int c = 0; c < f_cols; ++c)
+            out_file << " " << F(n, c);
+        out_file << "\n";
+    }
+
+    if (!per_face_attributes_list.empty()) {
+        out_file << "CELL_DATA " << f_n << "\n";
+        for (size_t i = 0; i < per_face_attributes_list.size(); ++i) {
+            const Eigen::VectorXd& attr = per_face_attributes_list[i];
+            const std::string& name = per_face_attributes_string_list[i];
+            if (attr.size() != f_n) continue;
+            out_file << "SCALARS " << name << " double 1\n"
+                     << "LOOKUP_TABLE default\n";
+            for (int t = 0; t < f_n; ++t)
+                out_file << attr(t) << "\n";
+        }
+    }
 }

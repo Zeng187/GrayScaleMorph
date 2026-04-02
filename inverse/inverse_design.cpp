@@ -6,6 +6,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include "boundary_utils.h"
 #include "functions.h"
 #include "material.hpp"
 #include "morphmesh.hpp"
@@ -98,6 +99,10 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     VertexPositionGeometry& geometry = *prob.geometry;
     const ActiveComposite&  ac       = *prob.ac;
 
+    // Build boundary-face reference mapping for shape operator computation.
+    std::vector<bool> is_boundary;
+    std::vector<int> ref_faces = buildRefFaces(mesh, is_boundary);
+
     const int nV = static_cast<int>(prob.V.rows());
     const int nF = static_cast<int>(prob.F.rows());
 
@@ -106,14 +111,9 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     // =====================================================================
     Morphmesh morph(prob.V, prob.P, prob.F, E, nu);
 
-    // Boundary flags: all false (no special boundary handling).
-    std::vector<bool> bv_flags(nV, false);
-    std::vector<bool> bf_flags(nF, false);
-    std::vector<int>  b_ref(nF, 0);
-
     Morphmesh::ComputeMorphophing(
         geometry, prob.V, prob.F, nV, nF,
-        bv_flags, bf_flags, b_ref, prob.MrInv,
+        prob.MrInv,
         morph.lambda_pv_t, morph.lambda_pf_t,
         morph.kappa_pv_t,  morph.kappa_pf_t,
         &morph.vertex_area_sum);
@@ -169,14 +169,14 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(
             geometry, prob.F, prob.MrInv, lambda_pf_s,
-            E, nu, ac.thickness, prob.w_s, prob.w_b);
+            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(
             geometry, targetV, Vr, prob.MrInv,
             lambda_pf_s, kappa_pv_s,
             adjointFunc_OptKap, penalty_to_kapp, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_kap, wL_kap, wP_kap,
-            E, nu, ac.thickness, prob.w_s, prob.w_b);
+            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
@@ -192,14 +192,14 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(
             geometry, prob.F, prob.MrInv, kappa_pv_s,
-            E, nu, ac.thickness, prob.w_s, prob.w_b);
+            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(
             geometry, targetV, Vr, prob.MrInv,
             lambda_pf_s, kappa_pv_s,
             adjointFunc_OptLam, penalty_to_lamb, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_lam, wL_lam, wP_lam,
-            E, nu, ac.thickness, prob.w_s, prob.w_b);
+            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
@@ -221,7 +221,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
             auto simFunc_proj = simulationFunction(
                 geometry, prob.MrInv, lambda_pf_proj, kappa_pf_proj,
-                E, nu, ac.thickness, prob.w_s, prob.w_b);
+                E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
             // Start from flat state to match physical initial condition.
             Eigen::MatrixXd Vr_proj = makeFlatFromParam(prob.P);
@@ -289,7 +289,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     // =====================================================================
     auto simFunc_final = simulationFunction(
         geometry, prob.MrInv, lambda_pf_final, kappa_pf_final,
-        E, nu, ac.thickness, prob.w_s, prob.w_b);
+        E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
     result.V_proj = makeFlatFromParam(prob.P);
     newton(geometry, result.V_proj, simFunc_final,

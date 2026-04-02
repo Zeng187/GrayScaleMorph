@@ -77,3 +77,10 @@ void write_output_vtk(
     const Eigen::MatrixXi& F,
     const std::vector<Eigen::VectorXd>& per_vertex_attributes_list,
     const std::vector<std::string>& per_vertex_attributes_string_list);
+
+void write_output_vtk_perface(
+    const std::string& filename,
+    const Eigen::MatrixXd& V,
+    const Eigen::MatrixXi& F,
+    const std::vector<Eigen::VectorXd>& per_face_attributes_list,
+    const std::vector<std::string>& per_face_attributes_string_list);

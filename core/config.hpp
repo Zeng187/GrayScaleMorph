@@ -32,13 +32,18 @@ public:
         std::string plan;    ///< plan tag (may be empty)
     } segment;
 
-    // ── Output paths ─────────────────────────────────────────────────
-    struct Output {
+    // ── Shared resource paths (read/write by multiple modules) ──────
+    struct Paths {
+        std::string param_path;   ///< parameterization results (Parameterize writes, Forward/Inverse read)
+        std::string morph_path;   ///< inverse design intermediates (Inverse writes)
+        std::string design_path;  ///< material design files (Inverse writes, Forward/Simulate read)
         std::string output_path;  ///< local output directory
-        std::string param_path;   ///< parameterization results directory
-        std::string morph_path;   ///< shared morph resource directory
-        std::string design_path;  ///< shared design resource directory
-    } output;
+    } paths;
+
+    // ── Optional single-patch override ───────────────────────────────
+    struct Patch {
+        int id = -1;  ///< patch id to process; < 0 means process all patches
+    } patch;
 
     // ── Solver parameters ────────────────────────────────────────────
     struct Solver {
@@ -63,12 +68,12 @@ public:
     /// Build segment directory: segment.path / {modelName}[_{method}][_{plan}] /
     std::string segmentDir(const std::string& modelName) const;
 
-    /// Build param output directory: output.param_path / model.name /
+    /// Build param directory: paths.param_path / model.name /
     std::string paramDir() const;
 
-    /// Build morph output directory: output.morph_path / model.name /
+    /// Build morph directory: paths.morph_path / model.name /
     std::string morphDir() const;
 
-    /// Build design output directory: output.design_path / model.name /
+    /// Build design directory: paths.design_path / model.name /
     std::string designDir() const;
 };

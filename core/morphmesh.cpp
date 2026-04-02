@@ -1,8 +1,10 @@
 #include "morphmesh.hpp"
+#include "boundary_utils.h"
 #include "material.hpp"
 #include <igl/principal_curvature.h>
 #include <igl/per_face_normals.h>
 #include <igl/per_vertex_normals.h>
+#include <spdlog/spdlog.h>
 
 Morphmesh::Morphmesh(const Eigen::MatrixXd& V,
     const Eigen::MatrixXd& P,
@@ -333,9 +335,6 @@ void Morphmesh::ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryIn
     const Eigen::MatrixXi& F,
     const int &nV,
     const int &nF,
-    const std::vector<bool>& boundary_vertex_flags,
-    const std::vector<bool>& boundary_face_flags,
-    const std::vector<int>& boundary_ref_indices,
     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
     Eigen::VectorXd& _lambda_pv,
     Eigen::VectorXd& _lambda_pf,
@@ -343,57 +342,45 @@ void Morphmesh::ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryIn
     Eigen::VectorXd& _kappa_pf,
     Eigen::VectorXd* vertex_area_sum_out)
 {
-
     using namespace Eigen;
     SurfaceMesh& mesh = geometry.mesh;
 
+    // Ensure output accumulators start from zero regardless of caller state.
+    _lambda_pv.setZero();
+    _lambda_pf.setZero();
+    _kappa_pv.setZero();
+    _kappa_pf.setZero();
+
+    // Cache per-face area (rest-domain) for weighting.
+    Eigen::VectorXd face_area(nF);
+
+    // =====================================================================
+    // Pass 1: compute per-face (lambda, kappa) from deformation gradient
+    //         and shape operator.  Boundary faces get incomplete L here;
+    //         their kappa will be corrected by extrapolation below.
+    // =====================================================================
     for (int face_id = 0; face_id < nF; ++face_id)
     {
-        int ref_face_id = face_id;
-        if (boundary_face_flags[face_id])
-            ref_face_id = boundary_ref_indices[face_id];
-
         Face f = mesh.face(face_id);
-        Face rf = mesh.face(ref_face_id);
-
-
         Eigen::Matrix2d MrInv_f = MrInv[f];
-        Eigen::Matrix2d MrInv_rf = MrInv[rf];
 
-        int x0_idx_f = f.halfedge().vertex().getIndex();
-        int x1_idx_f = f.halfedge().next().vertex().getIndex();
-        int x2_idx_f = f.halfedge().next().next().vertex().getIndex();
-        Eigen::Vector3d x0_f = V.row(x0_idx_f);
-        Eigen::Vector3d x1_f = V.row(x1_idx_f);
-        Eigen::Vector3d x2_f = V.row(x2_idx_f);
+        // Face vertices
+        Eigen::Vector3d x0 = V.row(f.halfedge().vertex().getIndex());
+        Eigen::Vector3d x1 = V.row(f.halfedge().next().vertex().getIndex());
+        Eigen::Vector3d x2 = V.row(f.halfedge().next().next().vertex().getIndex());
 
-        int x0_idx_rf = rf.halfedge().vertex().getIndex();
-        int x1_idx_rf = rf.halfedge().next().vertex().getIndex();
-        int x2_idx_rf = rf.halfedge().next().next().vertex().getIndex();
-        Eigen::Vector3d x0_rf = V.row(x0_idx_rf);
-        Eigen::Vector3d x1_rf = V.row(x1_idx_rf);
-        Eigen::Vector3d x2_rf = V.row(x2_idx_rf);
+        Eigen::Matrix<double, 3, 2> M = TinyAD::col_mat(x1 - x0, x2 - x0);
+        Eigen::MatrixXd Fg = M * MrInv_f;
 
-        Eigen::Matrix<double, 3, 2> M_f = TinyAD::col_mat(x1_f - x0_f, x2_f - x0_f);
-        Eigen::Matrix<double, 3, 2> M_rf = TinyAD::col_mat(x1_rf - x0_rf, x2_rf - x0_rf);
+        // Face normal (unnormalized)
+        Eigen::Vector3d n = M.col(0).cross(M.col(1));
 
-        Eigen::MatrixXd Fg_f = M_f * MrInv_f;
-        Eigen::MatrixXd Fg_rf = M_rf * MrInv_rf;
-
-
-
-        Eigen::Vector3d tagent_0_rf = M_rf.col(0);
-        Eigen::Vector3d tagent_1_rf = M_rf.col(1);
-        auto n_rf = tagent_0_rf.cross(tagent_1_rf);
-
-
+        // Shape operator via dihedral angles (boundary edges skipped)
         Eigen::Matrix3d L = Eigen::Matrix3d::Zero();
-        for (Halfedge he : rf.adjacentHalfedges())
+        for (Halfedge he : f.adjacentHalfedges())
         {
             if (he.edge().isBoundary())
-            {
                 continue;
-            }
 
             auto v0 = he.vertex().getIndex();
             auto v1 = he.next().vertex().getIndex();
@@ -402,67 +389,81 @@ void Morphmesh::ComputeMorphophing(geometrycentral::surface::IntrinsicGeometryIn
             Eigen::Vector3d e_1 = V.row(v1) - V.row(v0);
             Eigen::Vector3d e_2 = V.row(v2) - V.row(v0);
 
-            // compute dihedral angle theta
-            Eigen::Vector3d n_adj_rf = (e_2).cross(e_1);
-            double theta = atan2(n_rf.cross(n_adj_rf).dot(e_1), e_1.norm() * n_adj_rf.dot(n_rf));
+            Eigen::Vector3d n_adj = e_2.cross(e_1);
+            double theta = atan2(n.cross(n_adj).dot(e_1),
+                                 e_1.norm() * n_adj.dot(n));
 
-            Eigen::Vector3d t = n_rf.cross(e_1);
-
-            // add edge contribution
+            Eigen::Vector3d t = n.cross(e_1);
             L += theta * t.normalized() * t.transpose();
         }
-        L /= n_rf.squaredNorm();
+        L /= n.squaredNorm();
 
-        Eigen::Matrix2d a_mat = Fg_f.transpose() * Fg_f;
-        Eigen::Matrix2d b_mat = Fg_rf.transpose() * L * Fg_rf;
-
+        // First fundamental form  a = Fg^T Fg
+        Eigen::Matrix2d a_mat = Fg.transpose() * Fg;
+        // Second fundamental form b = Fg^T L Fg
+        Eigen::Matrix2d b_mat = Fg.transpose() * L * Fg;
 
         double lam = sqrt(0.5 * a_mat.trace());
-        _lambda_pf[face_id] = lam;
-
         double kap = 0.5 * (a_mat.inverse() * b_mat).trace();
-        _kappa_pf[face_id] = kap;
 
-        // Compute face area for area-weighted averaging
-        double face_area = 0.5 / MrInv_f.determinant();
+        _lambda_pf[face_id] = lam;
+        _kappa_pf[face_id]  = kap;
 
+        face_area[face_id] = 0.5 / MrInv_f.determinant();
+
+        // Accumulate per-vertex lambda (kappa deferred until after extrapolation)
         for (Vertex v : f.adjacentVertices())
-        {
-            int vert_id = v.getIndex();
-            _lambda_pv[vert_id] += lam * face_area;
-            _kappa_pv[vert_id] += kap * face_area;
-        }
+            _lambda_pv[v.getIndex()] += lam * face_area[face_id];
     }
 
-    // Compute total area at each vertex for area-weighted averaging
-    Eigen::VectorXd vertex_area_sum = Eigen::VectorXd::Zero(nV);
-    for (int face_id = 0; face_id < nF; ++face_id)
+    // =====================================================================
+    // Pass 2: boundary kappa extrapolation via ref_faces lookup
+    //
+    // Boundary faces (≥1 boundary edge) have incomplete shape operators.
+    // Replace their kappa with the kappa of their nearest interior reference
+    // face (determined by BFS on the face dual graph).
+    // =====================================================================
+    std::vector<bool> is_boundary;
+    std::vector<int> ref_faces = buildRefFaces(mesh, is_boundary);
+
+    for (int fi = 0; fi < nF; ++fi)
     {
-        Face f = mesh.face(face_id);
-        Eigen::Matrix2d MrInv_f = MrInv[f];
-        double face_area = 0.5 / MrInv_f.determinant();
-
-        for (Vertex v : f.adjacentVertices())
-        {
-            int vert_id = v.getIndex();
-            vertex_area_sum[vert_id] += face_area;
-        }
+        if (ref_faces[fi] != fi)
+            _kappa_pf[fi] = _kappa_pf[ref_faces[fi]];
     }
 
-    // Normalize by total area at each vertex
+    // =====================================================================
+    // Pass 3: per-vertex kappa (area-weighted average of corrected per-face)
+    // =====================================================================
+    for (int fi = 0; fi < nF; ++fi)
+    {
+        Face f = mesh.face(fi);
+        double kap = _kappa_pf[fi];
+        double area = face_area[fi];
+        for (Vertex v : f.adjacentVertices())
+            _kappa_pv[v.getIndex()] += kap * area;
+    }
+
+    // =====================================================================
+    // Pass 4: normalize per-vertex values by total area
+    // =====================================================================
+    Eigen::VectorXd vertex_area_sum = Eigen::VectorXd::Zero(nV);
+    for (int fi = 0; fi < nF; ++fi)
+    {
+        Face f = mesh.face(fi);
+        for (Vertex v : f.adjacentVertices())
+            vertex_area_sum[v.getIndex()] += face_area[fi];
+    }
+
     for (auto vert : mesh.vertices())
     {
-        int vert_id = vert.getIndex();
-        _kappa_pv[vert_id] /= vertex_area_sum[vert_id];
-        _lambda_pv[vert_id] /= vertex_area_sum[vert_id];
+        int vid = vert.getIndex();
+        _lambda_pv[vid] /= vertex_area_sum[vid];
+        _kappa_pv[vid]  /= vertex_area_sum[vid];
     }
 
-    // Store vertex_area_sum if requested
     if (vertex_area_sum_out != nullptr)
-    {
         *vertex_area_sum_out = vertex_area_sum;
-    }
-
 }
 
 

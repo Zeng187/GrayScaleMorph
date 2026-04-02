@@ -2,53 +2,46 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "CMake: Configure",
+            "label": "CMake Configure Debug",
             "type": "shell",
-            "command": "cmake",
-            "args": [
-                "-S", "${workspaceFolder}",
-                "-B", "${workspaceFolder}/build",
-                "-G", "Ninja"
-            ],
-            "group": "build",
-            "problemMatcher": []
+            "command": "cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "detail": "Configure CMake for Debug build (run once or after CMakeLists.txt changes)"
         },
         {
-            "label": "CMake: Build Debug",
+            "label": "CMake Configure Release",
             "type": "shell",
-            "command": "cmake",
-            "args": [
-                "--build", "${workspaceFolder}/build",
-                "--config", "Debug"
-            ],
-            "group": {
-                "kind": "build",
-                // "isDefault": true
-            },
-            "problemMatcher": "$msCompile",
-            "dependsOn": []
+            "command": "cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "detail": "Configure CMake for Release build (run once or after CMakeLists.txt changes)"
         },
         {
-            "label": "CMake: Build Release",
+            "label": "Build Debug",
             "type": "shell",
-            "command": "cmake",
-            "args": [
-                "--build", "${workspaceFolder}/build",
-                "--config", "Release"
-            ],
-            "group": "build",
-            "problemMatcher": "$msCompile"
+            "command": "cmake --build build/debug -j$(nproc)",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": ["$gcc"],
+            "group": { "kind": "build" },
+            "detail": "Incremental build (Debug)"
         },
         {
-            "label": "CMake: Clean",
+            "label": "Build Release",
             "type": "shell",
-            "command": "cmake",
-            "args": [
-                "--build", "${workspaceFolder}/build",
-                "--target", "clean"
-            ],
+            "command": "cmake --build build/release -j$(nproc)",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": ["$gcc"],
             "group": "build",
-            "problemMatcher": []
+            "detail": "Incremental build (Release)"
+        },
+        {
+            "label": "Clean Build Directories",
+            "type": "shell",
+            "command": "rm -rf build/debug build/release",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "detail": "Remove all build directories"
         }
     ]
 }

@@ -50,7 +50,7 @@ template <typename T>
 inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2) {
 	T val_1 = eval_poly(_curve, t1);
 	T val_2 = eval_poly(_curve, t2);
-	return T(1.5) * (val_1 - val_2) / T(thickness);
+	return T(1.5) * (val_2 - val_1) / T(thickness);
 }
 
 // Find the index of the nearest feasible (kap, lam) pair to (kap, lam) jointly

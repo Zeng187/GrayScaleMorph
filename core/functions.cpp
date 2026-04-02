@@ -13,6 +13,115 @@ inline T frob2(const Eigen::Matrix<T, R, C> &M)
   return (M.array() * M.array()).sum();
 }
 
+// ---------------------------------------------------------------------------
+// Internal helpers for shape operator (L) computation via ref_faces mapping.
+//
+// When ref_faces is non-null, boundary faces are redirected to a nearby
+// interior face so that the dihedral-angle stencil is complete.  Interior
+// faces (ref == self) behave identically to the original inline code.
+// ---------------------------------------------------------------------------
+namespace {
+
+/// Compute discrete shape operator L for simulation functions.
+///
+/// Simulation lambdas access vertex positions via `element.variables(Vertex)`.
+template <typename T, typename ElementT>
+Eigen::Matrix3<T> computeShapeOperator_Sim(
+    SurfaceMesh &mesh,
+    ElementT &element,
+    Face f,
+    const std::vector<int> &ref_faces)
+{
+  Face rf = mesh.face(ref_faces[f.getIndex()]);
+
+  // Reference-face normal (un-normalised, area-weighted)
+  Eigen::Vector3<T> x0_rf = element.variables(rf.halfedge().vertex());
+  Eigen::Vector3<T> x1_rf = element.variables(rf.halfedge().next().vertex());
+  Eigen::Vector3<T> x2_rf = element.variables(rf.halfedge().next().next().vertex());
+  Eigen::Vector3<T> n_rf = (x1_rf - x0_rf).cross(x2_rf - x0_rf);
+
+  Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
+  for (Halfedge he : rf.adjacentHalfedges())
+  {
+    if (he.edge().isBoundary())
+      continue;
+
+    Eigen::Vector3<T> e =
+        element.variables(he.next().vertex()) - element.variables(he.vertex());
+    Eigen::Vector3<T> nf =
+        (element.variables(he.twin().next().next().vertex()) -
+         element.variables(he.vertex()))
+            .cross(e);
+
+    T theta = atan2(n_rf.cross(nf).dot(e), e.norm() * nf.dot(n_rf));
+    Eigen::Vector3<T> t = n_rf.cross(e);
+    L += theta * t.normalized() * t.transpose();
+  }
+  L /= n_rf.squaredNorm();
+  return L;
+}
+
+/// Helper: fetch a vertex's 3D position in the adjoint variable layout.
+///
+/// Adjoint functions store all vertex coordinates as scalar variables:
+///   vars[3*vertexIndex + 0..2] = (x, y, z).
+template <typename T, typename ElementT>
+Eigen::Vector3<T> adjointVertexPos(
+    IntrinsicGeometryInterface &geometry,
+    ElementT &element,
+    Vertex v)
+{
+  const Eigen::Index vi = geometry.vertexIndices[v];
+  Eigen::Vector3<T> pos;
+  pos << element.variables(3 * vi),
+         element.variables(3 * vi + 1),
+         element.variables(3 * vi + 2);
+  return pos;
+}
+
+/// Compute discrete shape operator L for adjoint functions.
+///
+/// Adjoint lambdas access vertex positions via the flattened index layout.
+template <typename T, typename ElementT>
+Eigen::Matrix3<T> computeShapeOperator_Adj(
+    IntrinsicGeometryInterface &geometry,
+    ElementT &element,
+    Face f,
+    const std::vector<int> &ref_faces)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  Face rf = mesh.face(ref_faces[f.getIndex()]);
+
+  // Reference-face normal (un-normalised)
+  Eigen::Vector3<T> x0_rf = adjointVertexPos<T>(geometry, element, rf.halfedge().vertex());
+  Eigen::Vector3<T> x1_rf = adjointVertexPos<T>(geometry, element, rf.halfedge().next().vertex());
+  Eigen::Vector3<T> x2_rf = adjointVertexPos<T>(geometry, element, rf.halfedge().next().next().vertex());
+  Eigen::Vector3<T> n_rf = (x1_rf - x0_rf).cross(x2_rf - x0_rf);
+
+  Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
+  for (Halfedge he : rf.adjacentHalfedges())
+  {
+    if (he.edge().isBoundary())
+      continue;
+
+    Eigen::Vector3<T> e =
+        adjointVertexPos<T>(geometry, element, he.next().vertex()) -
+        adjointVertexPos<T>(geometry, element, he.vertex());
+    Eigen::Vector3<T> nf =
+        adjointVertexPos<T>(geometry, element, he.twin().next().next().vertex()) -
+        adjointVertexPos<T>(geometry, element, he.vertex());
+    nf = nf.cross(e);
+
+    T theta = atan2(n_rf.cross(nf).dot(e), e.norm() * nf.dot(n_rf));
+    Eigen::Vector3<T> t = n_rf.cross(e);
+    L += theta * t.normalized() * t.transpose();
+  }
+  L /= n_rf.squaredNorm();
+  return L;
+}
+
+} // anonymous namespace
+
 // Placeholder functions for theta to lambda/kappa conversion
 // TODO: Replace with actual material-based implementation
 template <typename T>
@@ -34,7 +143,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              const FaceData<double> &lambda,
                                                              const FaceData<double> &kappa,
                                                              double E, double nu, double h,
-                                                             double w_s, double w_b)
+                                                             double w_s, double w_b,
+                                                             const std::vector<int> &ref_faces)
 {
 
   SurfaceMesh &mesh = geometry.mesh;
@@ -77,17 +187,12 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                          return T(w_s) * Ws * dA;
                        });
 
-  func.add_elements<6>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+  func.add_elements<12>(
+      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
 
-        // Get variable 2D vertex positions
         Face f = element.handle;
-        auto x0_idx = f.halfedge().vertex();
-        auto x1_idx = f.halfedge().next().vertex();
-        auto x2_idx = f.halfedge().next().next().vertex();
         Eigen::Vector3<T> x0 = element.variables(f.halfedge().vertex());
         Eigen::Vector3<T> x1 = element.variables(f.halfedge().next().vertex());
         Eigen::Vector3<T> x2 = element.variables(f.halfedge().next().next().vertex());
@@ -101,34 +206,15 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
-        for(Halfedge he: f.adjacentHalfedges())
-        {
-          if(he.edge().isBoundary())
-            continue;
-          Eigen::Vector3<T> e = element.variables(he.next().vertex()) - element.variables(he.vertex());
-
-          // compute dihedral angle theta
-          Eigen::Vector3<T> nf =
-              (element.variables(he.twin().next().next().vertex()) - element.variables(he.vertex())).cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() *  nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Sim<T>(mesh, element, f, ref_faces);
 
         T lam_sqr = lam * lam;
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -141,7 +227,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              const FaceData<double> &lambda,
                                                              const VertexData<double> &kappa,
                                                              double E, double nu, double h,
-                                                             double w_s, double w_b)
+                                                             double w_s, double w_b,
+                                                             const std::vector<int> &ref_faces)
 {
 
   SurfaceMesh &mesh = geometry.mesh;
@@ -184,17 +271,12 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                          return T(w_s) * Ws * dA;
                        });
 
-  func.add_elements<6>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+  func.add_elements<12>(
+      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
 
-        // Get variable 2D vertex positions
         Face f = element.handle;
-        auto x0_idx = f.halfedge().vertex();
-        auto x1_idx = f.halfedge().next().vertex();
-        auto x2_idx = f.halfedge().next().next().vertex();
         Eigen::Vector3<T> x0 = element.variables(f.halfedge().vertex());
         Eigen::Vector3<T> x1 = element.variables(f.halfedge().next().vertex());
         Eigen::Vector3<T> x2 = element.variables(f.halfedge().next().next().vertex());
@@ -210,34 +292,15 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
-        for(Halfedge he: f.adjacentHalfedges())
-        {
-          if(he.edge().isBoundary())
-            continue;
-          Eigen::Vector3<T> e = element.variables(he.next().vertex()) - element.variables(he.vertex());
-
-          // compute dihedral angle theta
-          Eigen::Vector3<T> nf =
-              (element.variables(he.twin().next().next().vertex()) - element.variables(he.vertex())).cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() *  nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Sim<T>(mesh, element, f, ref_faces);
 
         T lam_sqr = lam * lam;
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -253,7 +316,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              double nu,
                                                              double h,
                                                              double w_s,
-                                                             double w_b)
+                                                             double w_b,
+                                                             const std::vector<int> &ref_faces)
 {
 
   SurfaceMesh &mesh = geometry.mesh;
@@ -297,17 +361,12 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
 
         return T(w_s) * Ws * dA; });
 
-  func.add_elements<6>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+  func.add_elements<12>(
+      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
 
-        // Get variable 2D vertex positions
         Face f = element.handle;
-        auto x0_idx = f.halfedge().vertex();
-        auto x1_idx = f.halfedge().next().vertex();
-        auto x2_idx = f.halfedge().next().next().vertex();
         Eigen::Vector3<T> x0 = element.variables(f.halfedge().vertex());
         Eigen::Vector3<T> x1 = element.variables(f.halfedge().next().vertex());
         Eigen::Vector3<T> x2 = element.variables(f.halfedge().next().next().vertex());
@@ -325,34 +384,15 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
-        for(Halfedge he: f.adjacentHalfedges())
-        {
-          if(he.edge().isBoundary())
-            continue;
-          Eigen::Vector3<T> e = element.variables(he.next().vertex()) - element.variables(he.vertex());
-
-          // compute dihedral angle theta
-          Eigen::Vector3<T> nf =
-              (element.variables(he.twin().next().next().vertex()) - element.variables(he.vertex())).cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Sim<T>(mesh, element, f, ref_faces);
 
         T lam_sqr = lam * lam;
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -371,7 +411,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
     double nu,
     double h,
     double w_s,
-    double w_b)
+    double w_b,
+    const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -433,8 +474,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         return T(w_s) * Ws * dA; });
 
   // 2nd fundamental form (bending energy)
-  func.add_elements<6>(
-      mesh.faces(), [&, alpha, beta, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+  func.add_elements<12>(
+      mesh.faces(), [&, alpha, beta, h, w_s, w_b, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
 
@@ -446,11 +487,11 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         Eigen::Matrix<T, 3, 2> M = TinyAD::col_mat(x1 - x0, x2 - x0);
         double dA = 0.5 / MrInv[f].determinant();
 
-        // // Compute lambda and kappa from t_layer_1, t_layer_2 for each vertex, then average
+        // Compute lambda and kappa from t_layer_1, t_layer_2 for each vertex, then average
         double t1_f = 0.0;
         double t2_f = 0.0;
         for(Vertex v: f.adjacentVertices()) {
-          double t1_v = t_layer_1[v]; 
+          double t1_v = t_layer_1[v];
           double t2_v = t_layer_2[v];
           t1_f += t1_v;
           t2_f += t2_v;
@@ -460,50 +501,20 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         double lam = compute_lamb_d(strain_curve, t1_f, t2_f);
         double kap = compute_curv_d(strain_curve, h, t1_f, t2_f);
 
-        // double lam = 0.0;
-        // double kap = 0.0;
-        // for(Vertex v: f.adjacentVertices()) {
-        //   double t1_v = t_layer_1[v];
-        //   double t2_v = t_layer_2[v];
-        //   double lam_v = compute_lamb_d(strain_curve, t1_v, t2_v);
-        //   double kap_v = compute_curv_d(strain_curve, h, t1_v, t2_v);
-        //   lam += lam_v / 3.0;
-        //   kap += kap_v / 3.0;
-        // }
-
         T lam_sqr = lam * lam;
 
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
-        for(Halfedge he: f.adjacentHalfedges())
-        {
-          if(he.edge().isBoundary())
-            continue;
-          Eigen::Vector3<T> e = element.variables(he.next().vertex()) - element.variables(he.vertex());
-
-          // compute dihedral angle theta
-          Eigen::Vector3<T> nf =
-              (element.variables(he.twin().next().next().vertex()) - element.variables(he.vertex())).cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Sim<T>(mesh, element, f, ref_faces);
 
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
         return T(w_b) * Wb * dA; });
 
@@ -521,7 +532,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
     double nu,
     double h,
     double w_s,
-    double w_b)
+    double w_b,
+    const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -570,8 +582,8 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         return T(w_s) * Ws * dA; });
 
   // 2nd fundamental form (bending energy)
-  func.add_elements<6>(
-      mesh.faces(), [&, alpha, beta, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+  func.add_elements<12>(
+      mesh.faces(), [&, alpha, beta, h, w_s, w_b, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
 
@@ -583,7 +595,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         Eigen::Matrix<T, 3, 2> M = TinyAD::col_mat(x1 - x0, x2 - x0);
         double dA = 0.5 / MrInv[f].determinant();
 
-        // // Compute lambda and kappa from t_layer_1, t_layer_2 for each vertex, then average
+        // Compute lambda and kappa from t_layer_1, t_layer_2
         double t1_f = t_layer_1[f];
         double t2_f = t_layer_2[f];
         double lam = compute_lamb_d(strain_curve, t1_f, t2_f);
@@ -594,34 +606,15 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunctionWithMaterial(
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
-        for(Halfedge he: f.adjacentHalfedges())
-        {
-          if(he.edge().isBoundary())
-            continue;
-          Eigen::Vector3<T> e = element.variables(he.next().vertex()) - element.variables(he.vertex());
-
-          // compute dihedral angle theta
-          Eigen::Vector3<T> nf =
-              (element.variables(he.twin().next().next().vertex()) - element.variables(he.vertex())).cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Sim<T>(mesh, element, f, ref_faces);
 
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
         return T(w_b) * Wb * dA; });
 
@@ -636,7 +629,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
-                                                                              double w_b)
+                                                                              double w_b,
+                                                                              const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -651,11 +645,9 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
   func.add_elements<9>(TinyAD::range(F.rows()),
                        [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
-                         // Evaluate element using either double or TinyAD::Double
                          using T = TINYAD_SCALAR_TYPE(element);
                          Eigen::Index f_idx = element.handle;
 
-                         // Get 3D vertex positions
                          Eigen::Matrix<T, 3, 2> M;
                          M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
                              element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -686,15 +678,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
   // 2nd fundamental form
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, E, nu, h, w_s, w_b, lambda, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // Get 3D vertex positions
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -708,42 +698,10 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
 
-          // rotate edge e around n
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-
-          // compute dihedral angle
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
         Eigen::Vector3<T> kappa_f;
         kappa_f << element.variables(3 * mesh.nVertices() + F(f_idx, 0)),
@@ -755,17 +713,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
         for (Vertex v : f.adjacentVertices())
           lam += lambda[v] / 3;
         T lam_sqr = lam * lam;
-        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d ::Identity();
-
-        // 本征度量 a_bar = (lambda^2) I
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
 
-        //// std::cout << F.transpose() * L * F << '\n';
-
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -781,14 +735,14 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
-                                                                              double w_b)
+                                                                              double w_b,
+                                                                              const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
   const double alpha = E * nu / (1 - nu * nu);
   const double beta = E / (2 * (1 + nu));
 
-  // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
       TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nVertices()));
 
@@ -796,11 +750,9 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
   func.add_elements<9>(TinyAD::range(F.rows()),
                        [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
-                         // Evaluate element using either double or TinyAD::Double
                          using T = TINYAD_SCALAR_TYPE(element);
                          Eigen::Index f_idx = element.handle;
 
-                         // Get 3D vertex positions
                          Eigen::Matrix<T, 3, 2> M;
                          M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
                              element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -811,10 +763,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
                          double dA = 0.5 / MrInv[f_idx].determinant();
 
-                         // Compute deformation gradient
                          Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
-
-                         // 第一基本型 a = F^T F
                          Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
 
                          T lam = T(lambda[f_idx]);
@@ -832,15 +781,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
   // 2nd fundamental form
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, E, nu, h, w_s, w_b, lambda, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // Get 3D vertex positions
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -851,45 +798,12 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
 
-          // rotate edge e around n
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-
-          // compute dihedral angle
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
         Eigen::Vector3<T> kappa_f;
         kappa_f << element.variables(3 * mesh.nVertices() + F(f_idx, 0)),
@@ -905,7 +819,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -921,7 +835,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
-                                                                              double w_b)
+                                                                              double w_b,
+                                                                              const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -978,15 +893,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
   // 2nd fundamental form
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, E, nu, h, w_s, w_b, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
-        // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // Get 3D vertex positions
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -997,45 +910,12 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
 
-          // rotate edge e around n
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-
-          // compute dihedral angle
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
         Eigen::Vector3<T> lambda_f;
         lambda_f << element.variables(3 * mesh.nVertices() + F(f_idx, 0)),
@@ -1047,13 +927,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
         for (Vertex v : f.adjacentVertices())
           kap += kappa[v] / 3;
 
-        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d ::Identity();
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -1065,12 +945,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
                                const Eigen::MatrixXi &F,
                                const FaceData<Eigen::Matrix2d> &MrInv,
-                               const VertexData<double> &kappa, // FixKap: 仍然是 per-vertex
+                               const VertexData<double> &kappa, // FixKap: per-vertex
                                double E,
                                double nu,
                                double h,
                                double w_s,
-                               double w_b)
+                               double w_b,
+                               const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -1081,9 +962,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
       TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nFaces()));
 
-  // -----------------------------
   // 1st fundamental form (stretching)
-  // -----------------------------
   func.add_elements<6 + 6>(
       TinyAD::range(F.rows()),
       [&, alpha, beta, E, nu, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
@@ -1091,7 +970,6 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // 3D vertex positions on this face
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -1102,43 +980,34 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
-
-        // a = F^T F
         Eigen::Matrix<T, 2, 2> a = Ff.transpose() * Ff;
 
-        // -------- Face-based lambda --------
-        // variable layout: lambda_f = vars[3|V| + f_idx]
+        // Face-based lambda: vars[3|V| + f_idx]
         T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
         T lam_sqr = lam * lam;
 
-        // a_bar = (lambda^2) I
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
 
-        // same as your original code
         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
         Ws = Ws * T(1.0) / lam_sqr;
 
         return T(w_s) * Ws * dA;
       });
 
-  // -----------------------------
   // 2nd fundamental form (bending)
-  // -----------------------------
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, E, nu, h, w_s, w_b, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // 3D vertex positions on this face
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -1149,53 +1018,18 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        // build discrete L (same logic as your original)
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
 
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-
-          // compute dihedral angle
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-
-          // add edge contribution
-          L += theta * t.normalized() * t.transpose();
-        }
-
-        L /= n.squaredNorm();
-
-        // -------- Face-based lambda --------
+        // Face-based lambda
         T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
         T lam_sqr = lam * lam;
 
-        // kap is averaged from vertices (same as original)
+        // kap averaged from vertices
         T kap = 0.0;
         for (Vertex v : f.adjacentVertices())
           kap += kappa[v] / 3;
@@ -1207,7 +1041,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
 
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
 
         return T(w_b) * Wb * dA;
@@ -1227,7 +1061,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
     double nu,
     double h,
     double w_s,
-    double w_b)
+    double w_b,
+    const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -1301,14 +1136,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
   // 2nd fundamental form (bending energy)
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, h, w_s, w_b, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // Get 3D vertex positions
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -1319,43 +1153,14 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
 
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
-
-        // // Get t_layer_1 (fixed) and t_layer_2 (variable) for face vertices
+        // Get t_layer_1 (fixed) and t_layer_2 (variable) for face vertices
         T t1_f = T(0);
         T t2_f = T(0);
         for (int k = 0; k < 3; k++)
@@ -1370,17 +1175,6 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
         T lam = compute_lamb_d(strain_curve, t1_f, t2_f);
         T kap = compute_curv_d(strain_curve, h, t1_f, t2_f);
 
-        // T lam = T(0);
-        // T kap = T(0);
-        // for (int k = 0; k < 3; k++) {
-        //   T t1_v = t_layer_1[mesh.vertex(F(f_idx, k))];
-        //   T t2_v = element.variables(3 * mesh.nVertices() + F(f_idx, k))(0);
-        //   T lam_v = compute_lamb_d(strain_curve, t1_v, t2_v);
-        //   T kap_v = compute_curv_d(strain_curve, h, t1_v, t2_v);
-        //   lam += lam_v / T(3.0);
-        //   kap += kap_v / T(3.0);
-        // }
-
         T lam_sqr = lam * lam;
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2<T>::Identity();
 
@@ -1388,7 +1182,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay1
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -1407,7 +1201,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
     double nu,
     double h,
     double w_s,
-    double w_b)
+    double w_b,
+    const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
 
@@ -1481,14 +1276,13 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
   // 2nd fundamental form (bending energy)
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, alpha, beta, h, w_s, w_b, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
 
-        // Get 3D vertex positions
         Eigen::Matrix<T, 3, 2> M;
         M << element.variables(3 * F(f_idx, 1) + 0) - element.variables(3 * F(f_idx, 0) + 0),
             element.variables(3 * F(f_idx, 2) + 0) - element.variables(3 * F(f_idx, 0) + 0),
@@ -1499,43 +1293,14 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
 
         double dA = 0.5 / MrInv[f_idx].determinant();
 
-        // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f_idx]);
 
-        // Compute normal
-        Eigen::Vector3<T> n = M.col(0).cross(M.col(1));
-
-        Eigen::Matrix3<T> L = Eigen::Matrix3<T>::Zero();
         Face f = mesh.face(f_idx);
-        for (Halfedge he : f.adjacentHalfedges())
-        {
-          if (he.edge().isBoundary())
-            continue;
 
-          Eigen::Vector3<T> e;
-          e << element.variables(3 * geometry.vertexIndices[he.next().vertex()]) -
-                   element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
+        // Compute shape operator via ref_faces mapping
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
-          Eigen::Vector3<T> nf;
-          nf << element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()]) -
-                    element.variables(3 * geometry.vertexIndices[he.vertex()]),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 1) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 1),
-              element.variables(3 * geometry.vertexIndices[he.twin().next().next().vertex()] + 2) -
-                  element.variables(3 * geometry.vertexIndices[he.vertex()] + 2);
-          nf = nf.cross(e);
-          T theta = atan2(n.cross(nf).dot(e), e.norm() * nf.dot(n));
-
-          Eigen::Vector3<T> t = n.cross(e);
-          L += theta * t.normalized() * t.transpose();
-        }
-        L /= n.squaredNorm();
-
-        // // Get t_layer_1 (fixed) and t_layer_2 (variable) for face vertices
+        // Get t_layer_1 (variable) and t_layer_2 (fixed) for face vertices
         T t1_f = T(0);
         T t2_f = T(0);
         for (int k = 0; k < 3; k++)
@@ -1550,17 +1315,6 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
         T lam = compute_lamb_d(strain_curve, t1_f, t2_f);
         T kap = compute_curv_d(strain_curve, h, t1_f, t2_f);
 
-        // T lam = T(0);
-        // T kap = T(0);
-        // for (int k = 0; k < 3; k++) {
-        //   T t1_v = t_layer_1[mesh.vertex(F(f_idx, k))];
-        //   T t2_v = element.variables(3 * mesh.nVertices() + F(f_idx, k))(0);
-        //   T lam_v = compute_lamb_d(strain_curve, t1_v, t2_v);
-        //   T kap_v = compute_curv_d(strain_curve, h, t1_v, t2_v);
-        //   lam += lam_v / T(3.0);
-        //   kap += kap_v / T(3.0);
-        // }
-
         T lam_sqr = lam * lam;
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2<T>::Identity();
 
@@ -1568,7 +1322,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunctionWithMaterial_Lay2
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3);
+        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });

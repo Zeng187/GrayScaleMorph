@@ -125,6 +125,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -171,7 +172,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th);
@@ -309,6 +310,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -355,7 +357,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th);
@@ -479,8 +481,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   const Eigen::MatrixXd& targetV,
                                   const Eigen::MatrixXd& initV,
                                   const FaceData<Eigen::Matrix2d>& MrInv,
-                                  FaceData<double>& theta1,  
-                                  VertexData<double>& theta2,  
+                                  FaceData<double>& theta1,
+                                  VertexData<double>& theta2,
                                   const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                   const std::vector<int>& fixedIdx,
                                   int max_iters,
@@ -492,6 +494,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   double h,
                                   double w_s,
                                   double w_b,
+                                  const std::vector<int>& ref_faces,
                                   const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -590,7 +593,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     theta1.fromVector(th);
 
     // IMPORTANT: call the overload with (FaceData<double> lambda, VertexData<double> kappa)
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
 
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
@@ -739,6 +742,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -785,7 +789,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta1.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th);
@@ -923,6 +927,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -968,7 +973,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1111,6 +1116,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -1157,7 +1163,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1301,6 +1307,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -1347,7 +1354,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta1.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1475,7 +1482,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           const Eigen::MatrixXd& initV,
                                                           const FaceData<Eigen::Matrix2d>& MrInv,
                                                           FaceData<double>& theta1,   // <-- FaceData lam
-                                                          VertexData<double>& theta2, // FixKap: kappa (仍按你们原逻辑)
+                                                          VertexData<double>& theta2, // FixKap: kappa
                                                           const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                                           const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
                                                           const std::vector<int>& fixedIdx,
@@ -1489,6 +1496,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           double h,
                                                           double w_s,
                                                           double w_b,
+                                                          const std::vector<int>& ref_faces,
                                                           const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -1592,7 +1600,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     theta1.fromVector(th);
 
     // IMPORTANT: overload with FaceData<double> lambda
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1755,6 +1763,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -1797,9 +1806,9 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
 
   auto distance = [&](const Eigen::VectorXd& th) {
     t_layer_1.fromVector(th);
-    auto simFunc = simulationFunctionWithMaterial(geometry, MrInv, 
+    auto simFunc = simulationFunctionWithMaterial(geometry, MrInv,
                                       t_layer_1,t_layer_2,strain_curve,moduls_curve,
-                                      E, nu, h, w_s, w_b);
+                                      E, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) +  wL * th.dot(L * th);
@@ -1944,6 +1953,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireVertexIndices();
@@ -1986,9 +1996,9 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
 
   auto distance = [&](const Eigen::VectorXd& th) {
     t_layer_2.fromVector(th);
-    auto simFunc = simulationFunctionWithMaterial(geometry, MrInv, 
+    auto simFunc = simulationFunctionWithMaterial(geometry, MrInv,
                                       t_layer_1,t_layer_2,strain_curve,moduls_curve,
-                                      E, nu, h, w_s, w_b);
+                                      E, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) +  wL * th.dot(L * th);

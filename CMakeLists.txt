@@ -19,20 +19,21 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/deps/TinyAD-src" EXCLUDE_FROM_ALL)
 # Shared core library — all algorithms, no entry points
 # ═══════════════════════════════════════════════════════════════════════
 add_library(grayscale_core STATIC
-  common/config.hpp       common/config.cpp
-  common/material.hpp     common/material.cpp
-  common/output.hpp       common/output.cpp
-  common/common.hpp       common/solvers.h      common/timer.h
-  morph/parameterization.h      morph/parameterization.cpp
-  morph/parameterize_pipeline.h morph/parameterize_pipeline.cpp
-  morph/LocalGlobalSolver.h     morph/LocalGlobalSolver.cpp
-  morph/morphmesh.hpp           morph/morphmesh.cpp
-  morph/morph_functions.hpp     morph/morph_functions.cpp
-  morph/functions.h             morph/functions.cpp
-  morph/newton.h                morph/newton.cpp
-  morph/simulation_utils.h      morph/simulation_utils.cpp
-  morph/inverse_design.h        morph/inverse_design.cpp
-  metric/patch_utils.h          metric/patch_utils.cpp
+  core/config.hpp             core/config.cpp
+  core/material.hpp           core/material.cpp
+  core/output.hpp             core/output.cpp
+  core/patch_utils.h          core/patch_utils.cpp
+  core/common.hpp             core/solvers.h            core/timer.h
+  core/parameterization.h     core/parameterization.cpp
+  core/parameterize_pipeline.h core/parameterize_pipeline.cpp
+  core/LocalGlobalSolver.h    core/LocalGlobalSolver.cpp
+  core/morphmesh.hpp          core/morphmesh.cpp
+  core/morph_functions.hpp    core/morph_functions.cpp
+  core/functions.h            core/functions.cpp
+  core/newton.h               core/newton.cpp
+  core/simulation_utils.h     core/simulation_utils.cpp
+  core/boundary_utils.h       core/boundary_utils.cpp
+  inverse/inverse_design.h    inverse/inverse_design.cpp
 )
 
 target_link_libraries(grayscale_core PUBLIC
@@ -45,9 +46,8 @@ target_link_libraries(grayscale_core PUBLIC
 )
 
 target_include_directories(grayscale_core PUBLIC
-  "${CMAKE_SOURCE_DIR}/common"
-  "${CMAKE_SOURCE_DIR}/morph"
-  "${CMAKE_SOURCE_DIR}/metric"
+  "${CMAKE_SOURCE_DIR}/core"
+  "${CMAKE_SOURCE_DIR}/inverse"
   "${CMAKE_SOURCE_DIR}/include"
 )
 
@@ -55,13 +55,18 @@ target_include_directories(grayscale_core PUBLIC
 # Executable targets
 # ═══════════════════════════════════════════════════════════════════════
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
 
-# Inverse design (current main entry point)
-add_executable(Inverse morph/main.cpp)
+# Inverse design — single patch (reads inverse_cfg.json)
+add_executable(Inverse inverse/main.cpp)
 target_link_libraries(Inverse PRIVATE grayscale_core)
 
+# Inverse design — all patches (reads inverse_whole_cfg.json)
+add_executable(InverseWhole inverse_whole/main.cpp)
+target_link_libraries(InverseWhole PRIVATE grayscale_core)
+
 # Backward-compat alias
-add_executable(GrayScaleMorph morph/main.cpp)
+add_executable(GrayScaleMorph inverse/main.cpp)
 target_link_libraries(GrayScaleMorph PRIVATE grayscale_core)
 
 # Parameterize-only entry point
@@ -75,6 +80,10 @@ target_link_libraries(Forward PRIVATE grayscale_core)
 # Evaluation entry point (replaces FeasEval + PatchMetrics)
 add_executable(Evaluate eval/main.cpp)
 target_link_libraries(Evaluate PRIVATE grayscale_core)
+
+# Verify: compute per-face (lambda, kappa) on an arbitrary 3D mesh
+add_executable(Verify verify/main.cpp)
+target_link_libraries(Verify PRIVATE grayscale_core)
 
 if (MSVC)
     target_compile_options(Inverse PRIVATE /utf-8)

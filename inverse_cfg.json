@@ -17,6 +17,9 @@
     "design_path": "../Resources/design/",
     "output_path": "./outputs/"
   },
+  "patch": {
+    "id": 0
+  },
   "solver": {
     "platewidth": 40.0,
     "max_iter": 20,

@@ -1,0 +1,23 @@
+{
+  "model": {
+    "name": "circle"
+  },
+  "material": {
+    "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
+  },
+  "path": {
+    "param_path": "../Resources/param/",
+    "output_path": "../Resources/forward/"
+  },
+  "design": {
+    "design_name": "g00g60_r000",
+    "cond_name": "bound_center.txt",
+    "design_path": "../Resources/design/circle/",
+    "cond_path": "../Resources/cond/circle/"
+  },
+  "solver": {
+    "max_iter": 200,
+    "epsilon": 1e-7,
+    "nf_min": 1000
+  }
+}

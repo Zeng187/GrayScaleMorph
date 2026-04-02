@@ -326,12 +326,6 @@ PieceResult evaluatePiece(
     const int nV = static_cast<int>(param.V.rows());
     const int nF = static_cast<int>(param.F.rows());
 
-    // parameterizeMesh trims hole-fill faces, so param.F and param.mesh
-    // have the same face count.  No boundary flags needed.
-    std::vector<bool> bv(nV, false);
-    std::vector<bool> bf(nF, false);
-    std::vector<int>  bref(nF, 0);
-
     // -- Compute target (lambda, kappa) ------------------------------------
     Eigen::VectorXd lam_pv = Eigen::VectorXd::Zero(nV);
     Eigen::VectorXd lam_pf = Eigen::VectorXd::Zero(nF);
@@ -340,7 +334,7 @@ PieceResult evaluatePiece(
 
     Morphmesh::ComputeMorphophing(
         *param.geometry, param.V, param.F,
-        nV, nF, bv, bf, bref, param.MrInv,
+        nV, nF, param.MrInv,
         lam_pv, lam_pf, kap_pv, kap_pf);
 
     // -- Compute per-face Gaussian curvature (det of shape operator) -------

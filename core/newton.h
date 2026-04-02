@@ -50,6 +50,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -71,6 +72,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(
@@ -91,6 +93,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -112,6 +115,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -136,6 +140,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -159,6 +164,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -182,6 +188,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(
@@ -204,6 +211,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -226,6 +234,7 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -248,4 +257,5 @@ double nu,
 double h,
 double w_s,
 double w_b,
+const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
