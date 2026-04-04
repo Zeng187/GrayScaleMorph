@@ -122,13 +122,13 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
         morph.lambda_pv_t, morph.lambda_pf_t,
         morph.kappa_pv_t,  morph.kappa_pf_t,
         morph.lambda_pv_s, morph.lambda_pf_s,
-        morph.kappa_pv_s,  morph.kappa_pf_s);
+        morph.kappa_pf_s,  morph.kappa_pf_s);
 
     // =====================================================================
     // 2. Wrap morph parameters into geometry-central containers
     // =====================================================================
-    FaceData<double>   lambda_pf_s(mesh, morph.lambda_pf_s);
-    VertexData<double> kappa_pv_s (mesh, morph.kappa_pv_s);
+    FaceData<double> lambda_pf_s(mesh, morph.lambda_pf_s);
+    FaceData<double> kappa_pf_s (mesh, morph.kappa_pf_s);
 
     if (prob.patch_id >= 0)
         spdlog::info("Patch {}: Starting SGN inverse design.", prob.patch_id);
@@ -161,7 +161,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
     for (int k = 0; k < kMaxStages; ++k) {
         // ----- OptKap: optimise kappa (per-vertex), fix lambda (per-face) ----
-        auto penalty_to_kapp = JointMaterialPenaltyPerV_OptKap(
+        auto penalty_to_kapp = JointMaterialPenaltyPerF_OptKap(
             geometry, prob.F, lambda_pf_s,
             ac.feasible_lamb, ac.feasible_kapp, prob.betaP);
 
@@ -173,36 +173,36 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(
             geometry, targetV, Vr, prob.MrInv,
-            lambda_pf_s, kappa_pv_s,
+            lambda_pf_s, kappa_pf_s,
             adjointFunc_OptKap, penalty_to_kapp, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_kap, wL_kap, wP_kap,
             E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
+        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         logStageFinish(prob.patch_id, "OptKap", k, distance, penalty_kap, penalty_lam);
 
         // ----- OptLam: optimise lambda (per-face), fix kappa (per-vertex) ----
         auto penalty_to_lamb = JointMaterialPenaltyPerF_OptLam(
-            geometry, prob.F, kappa_pv_s,
+            geometry, prob.F, kappa_pf_s,
             ac.feasible_lamb, ac.feasible_kapp, prob.betaP);
 
         logStageStart(prob.patch_id, "OptLam", k, wP_kap, wP_lam);
 
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(
-            geometry, prob.F, prob.MrInv, kappa_pv_s,
+            geometry, prob.F, prob.MrInv, kappa_pf_s,
             E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(
             geometry, targetV, Vr, prob.MrInv,
-            lambda_pf_s, kappa_pv_s,
+            lambda_pf_s, kappa_pf_s,
             adjointFunc_OptLam, penalty_to_lamb, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_lam, wL_lam, wP_lam,
             E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
+        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         logStageFinish(prob.patch_id, "OptLam", k, distance, penalty_kap, penalty_lam);
 
@@ -212,7 +212,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
             FaceData<double> lambda_pf_proj(mesh);
 
             for (Face f : mesh.faces()) {
-                double kap = averageVertexDataOnFace(kappa_pv_s, f);
+                double kap = kappa_pf_s[f];
                 double lam = lambda_pf_s[f];
                 int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
                 kappa_pf_proj[f]  = ac.feasible_kapp[idx];
@@ -269,7 +269,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     for (Face f : mesh.faces()) {
         const int fid = static_cast<int>(f.getIndex());
 
-        const double kap_f = averageVertexDataOnFace(kappa_pv_s, f);
+        const double kap_f = kappa_pf_s[f];
         const double lam_f = lambda_pf_s[f];
 
         int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap_f, lam_f);

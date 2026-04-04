@@ -161,6 +161,8 @@ ParameterizeResult parameterizeMesh(
 
     // 7. Platewidth scaling: fit parameterization bbox to platewidth,
     //    apply the same factor to V so that V and P stay in the same scale.
+    //    This ensures the deformation gradient F = M(V) * MrInv(P) has correct
+    //    stretch magnitudes relative to the material window.
     const double scale =
         platewidth / (P.colwise().maxCoeff() - P.colwise().minCoeff()).maxCoeff();
     V *= scale;

@@ -114,7 +114,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                                const Eigen::MatrixXi &F,
                                const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
-                               const geometrycentral::surface::VertexData<double> &kappa,
+                               const geometrycentral::surface::FaceData<double> &kappa,
                                double E,
                                double nu,
                                double h,
@@ -162,7 +162,7 @@ MaterialPenaltyFunctionPerF(geometrycentral::surface::IntrinsicGeometryInterface
                             double beta);
 
 TinyAD::ScalarFunction<1, double, Eigen::Index>
-JointMaterialPenaltyPerV_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+JointMaterialPenaltyPerF_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                                 const Eigen::MatrixXi &F,
                                 const geometrycentral::surface::FaceData<double> &lambda_pf,
                                 const std::vector<double> &feasible_lamb,
@@ -172,7 +172,7 @@ JointMaterialPenaltyPerV_OptKap(geometrycentral::surface::IntrinsicGeometryInter
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 JointMaterialPenaltyPerF_OptLam(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                                 const Eigen::MatrixXi &F,
-                                const geometrycentral::surface::VertexData<double> &kappa_pv,
+                                const geometrycentral::surface::FaceData<double> &kappa_pf,
                                 const std::vector<double> &feasible_lamb,
                                 const std::vector<double> &feasible_kapp,
                                 double beta);
