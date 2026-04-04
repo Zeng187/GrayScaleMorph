@@ -37,7 +37,7 @@ public:
         std::string param_path;   ///< parameterization results (Parameterize writes, Forward/Inverse read)
         std::string morph_path;   ///< inverse design intermediates (Inverse writes)
         std::string design_path;  ///< material design files (Inverse writes, Forward/Simulate read)
-        std::string output_path;  ///< local output directory
+        std::string cond_path;    ///< boundary condition files (Inverse writes, Forward/Simulate read)
     } paths;
 
     // ── Optional single-patch override ───────────────────────────────
@@ -65,15 +65,21 @@ public:
 
     // ── Convenience path builders ────────────────────────────────────
 
-    /// Build segment directory: segment.path / {modelName}[_{method}][_{plan}] /
-    std::string segmentDir(const std::string& modelName) const;
+    /// Model directory name: model.name[_method][_plan] — same naming as segmentDir.
+    std::string modelDir() const;
 
-    /// Build param directory: paths.param_path / model.name /
+    /// Build segment directory: segment.path / modelDir() /
+    std::string segmentDir() const;
+
+    /// Build param directory: paths.param_path / modelDir() /
     std::string paramDir() const;
 
-    /// Build morph directory: paths.morph_path / model.name /
+    /// Build morph directory: paths.morph_path / modelDir() /
     std::string morphDir() const;
 
-    /// Build design directory: paths.design_path / model.name /
+    /// Build design directory: paths.design_path / modelDir() /
     std::string designDir() const;
+
+    /// Build cond directory: paths.cond_path / modelDir() /
+    std::string condDir() const;
 };

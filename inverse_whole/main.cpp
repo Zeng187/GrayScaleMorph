@@ -1,17 +1,18 @@
-/// InverseWhole — per-patch inverse design for ALL patches in a segmented mesh.
+/// InverseWhole — per-patch inverse design for ALL patches.
 ///
-/// Reads inverse_whole_cfg.json, requires seg_id.txt.
-/// For single-patch inverse design, use the Inverse executable with inverse_cfg.json.
+/// Reads patch meshes directly from segmentDir()/patches/patch_{pid}.obj.
+/// Each patch is independently parameterized, inverse-designed, and output.
 
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
 #include <igl/loop.h>
-#include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <regex>
+#include <set>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
@@ -26,84 +27,46 @@
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "output.hpp"
-#include "patch_utils.h"
 #include "inverse_design.h"
 
 using namespace geometrycentral;
 using namespace geometrycentral::surface;
 
-// ---------------------------------------------------------------------------
-// Run inverse design on a single patch and scatter results to global arrays.
-// ---------------------------------------------------------------------------
-static void runOnPatch(
-    const Eigen::MatrixXd& V_patch,
-    const Eigen::MatrixXi& F_patch,
-    const Eigen::MatrixXd& P_patch,
-    const std::vector<int>& global_face_ids,
-    const Config& config,
-    const ActiveComposite& ac,
-    int patch_id,
-    Eigen::VectorXd& global_t1,
-    Eigen::VectorXd& global_t2,
-    Eigen::VectorXd& global_lam_excess,
-    Eigen::VectorXd& global_kap_excess,
-    const std::string& morphDir)
-{
-    const auto& solver = config.solver;
-    const int nF_p = static_cast<int>(F_patch.rows());
-    spdlog::info("=== Patch {} inverse design: {} vertices, {} faces ===",
-                 patch_id, V_patch.rows(), nF_p);
+namespace {
 
-    ManifoldSurfaceMesh mesh_p(F_patch);
-    VertexPositionGeometry geom_p(mesh_p, V_patch);
-    geom_p.refreshQuantities();
-
-    FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, P_patch, F_patch);
-    std::vector<int> fixedIdx_p = findCenterFaceIndices(P_patch, F_patch);
-
-    InverseDesignProblem problem;
-    problem.V         = V_patch;
-    problem.F         = F_patch;
-    problem.P         = P_patch;
-    problem.mesh      = &mesh_p;
-    problem.geometry  = &geom_p;
-    problem.MrInv     = MrInv_p;
-    problem.fixedIdx  = fixedIdx_p;
-    problem.ac        = &ac;
-    problem.max_iter          = solver.max_iter;
-    problem.epsilon           = solver.epsilon;
-    problem.w_s               = solver.w_s;
-    problem.w_b               = solver.w_b;
-    problem.wM_kap            = solver.wM_kap;
-    problem.wL_kap            = solver.wL_kap;
-    problem.wM_lam            = solver.wM_lam;
-    problem.wL_lam            = solver.wL_lam;
-    problem.wP_kap            = solver.wP_kap;
-    problem.wP_lam            = solver.wP_lam;
-    problem.penalty_threshold = solver.penalty_threshold;
-    problem.betaP             = solver.betaP;
-    problem.patch_id          = patch_id;
-
-    InverseDesignResult result = runInverseDesign(problem);
-
-    // Write per-patch projected shape
-    {
-        std::string path = morphDir + "patch_" + std::to_string(patch_id) + "_proj.obj";
-        igl::writeOBJ(path, result.V_proj, F_patch);
-        spdlog::info("Patch {}: proj shape -> {}", patch_id, path);
-    }
-
-    // Scatter to global arrays
-    for (int i = 0; i < nF_p; ++i) {
-        int gfid = global_face_ids[i];
-        global_t1[gfid]         = result.t1[i];
-        global_t2[gfid]         = result.t2[i];
-        global_lam_excess[gfid] = result.lam_excess[i];
-        global_kap_excess[gfid] = result.kap_excess[i];
-    }
-
-    spdlog::info("=== Patch {} done ===", patch_id);
+std::vector<int> fixedDofsToVertices(const std::vector<int>& fixedIdx) {
+    std::set<int> vset;
+    for (int dof : fixedIdx) if (dof >= 0) vset.insert(dof / 3);
+    return {vset.begin(), vset.end()};
 }
+
+void writeCondFile(const std::string& path, const std::vector<int>& fixedIdx) {
+    auto verts = fixedDofsToVertices(fixedIdx);
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    std::ofstream ofs(path);
+    for (size_t i = 0; i < verts.size(); i++)
+        ofs << verts[i] << (i + 1 < verts.size() ? " " : "\n");
+    spdlog::info("Boundary condition written to: {}", path);
+}
+
+/// Discover patch OBJ files in a directory, sorted by patch id.
+/// Expects files named patch_0.obj, patch_1.obj, ...
+std::vector<std::string> discoverPatches(const std::string& patchesDir) {
+    std::vector<std::pair<int, std::string>> found;
+    const std::regex pat(R"(patch_(\d+)\.obj)");
+    for (auto& entry : std::filesystem::directory_iterator(patchesDir)) {
+        std::smatch m;
+        std::string fname = entry.path().filename().string();
+        if (std::regex_match(fname, m, pat))
+            found.emplace_back(std::stoi(m[1].str()), entry.path().string());
+    }
+    std::sort(found.begin(), found.end());
+    std::vector<std::string> paths;
+    for (auto& [id, p] : found) paths.push_back(std::move(p));
+    return paths;
+}
+
+} // anonymous namespace
 
 // ---------------------------------------------------------------------------
 // main
@@ -115,12 +78,11 @@ int main(int argc, char* argv[])
     // --- Config ---
     const std::string cfgPath = "inverse_whole_cfg.json";
     if (!std::filesystem::exists(cfgPath)) {
-        spdlog::error("Config not found: {}. InverseWhole requires inverse_whole_cfg.json.", cfgPath);
+        spdlog::error("Config not found: {}", cfgPath);
         return -1;
     }
     Config config(cfgPath);
     const auto& model  = config.model;
-    const auto& paths  = config.paths;
     const auto& solver = config.solver;
 
     // --- Material ---
@@ -128,128 +90,149 @@ int main(int argc, char* argv[])
     ac.ComputeMaterialCurve();
     ac.ComputeFeasibleVals();
 
-    // --- Directories ---
+    // --- Output directories ---
     std::string morphDir   = config.morphDir();
     std::string designDir  = config.designDir();
-    std::string metricsDir = paths.output_path + model.name + "/";
-    std::filesystem::create_directories(paths.output_path);
+    std::string condDir    = config.condDir();
     std::filesystem::create_directories(morphDir);
     std::filesystem::create_directories(designDir);
-    std::filesystem::create_directories(metricsDir);
+    std::filesystem::create_directories(condDir);
 
-    // --- Load mesh ---
-    Eigen::MatrixXd V;
-    Eigen::MatrixXi F;
-    if (!igl::readOBJ(model.mesh_path, V, F)) {
-        spdlog::error("Cannot read mesh: {}", model.mesh_path);
+    // --- Discover patches ---
+    std::string patchesDir = config.segmentDir() + "patches/";
+    if (!std::filesystem::is_directory(patchesDir)) {
+        spdlog::error("Patches directory not found: {}", patchesDir);
         return -1;
     }
-    spdlog::info("Mesh: {} vertices, {} faces.", V.rows(), F.rows());
-
-    size_t nF = F.rows();
-    while (nF < static_cast<size_t>(solver.nf_min)) {
-        Eigen::MatrixXd tV = V; Eigen::MatrixXi tF = F;
-        igl::loop(tV, tF, V, F);
-        nF = F.rows();
-    }
-
-    // --- Segmentation (required) ---
-    std::string segDir = config.segmentDir(model.name);
-    std::string segid_path = segDir + "seg_id.txt";
-
-    // Fallback to plain model name
-    if (!std::filesystem::exists(segid_path) && !config.segment.method.empty()) {
-        segid_path = config.segment.path + model.name + "/seg_id.txt";
-    }
-
-    if (!std::filesystem::exists(segid_path)) {
-        spdlog::error("seg_id.txt not found at: {}. InverseWhole requires segmentation.", segid_path);
+    std::vector<std::string> patchFiles = discoverPatches(patchesDir);
+    int numPatches = static_cast<int>(patchFiles.size());
+    if (numPatches == 0) {
+        spdlog::error("No patch_*.obj files found in: {}", patchesDir);
         return -1;
     }
+    spdlog::info("Found {} patches in: {}", numPatches, patchesDir);
 
-    std::vector<int> seg_id = loadSegId(segid_path);
-    int nF_global = static_cast<int>(F.rows());
-    if (static_cast<int>(seg_id.size()) != nF_global) {
-        spdlog::error("seg_id size ({}) != face count ({})", seg_id.size(), nF_global);
-        return -1;
+    // --- Load all patches and find consistent scale ---
+    struct PatchMesh { Eigen::MatrixXd V; Eigen::MatrixXi F; };
+    std::vector<PatchMesh> patches(numPatches);
+    double maxExtent = 0.0;
+    int largestPatch = 0;
+
+    for (int pid = 0; pid < numPatches; ++pid) {
+        if (!igl::readOBJ(patchFiles[pid], patches[pid].V, patches[pid].F)) {
+            spdlog::error("Cannot read patch: {}", patchFiles[pid]);
+            return -1;
+        }
+        // Loop subdivide per-patch if below nf_min
+        while (static_cast<int>(patches[pid].F.rows()) < solver.nf_min) {
+            Eigen::MatrixXd tV = patches[pid].V;
+            Eigen::MatrixXi tF = patches[pid].F;
+            igl::loop(tV, tF, patches[pid].V, patches[pid].F);
+        }
+        double ext = (patches[pid].V.colwise().maxCoeff()
+                    - patches[pid].V.colwise().minCoeff()).maxCoeff();
+        if (ext > maxExtent) {
+            maxExtent = ext;
+            largestPatch = pid;
+        }
+        spdlog::info("Patch {}: {} vertices, {} faces (from {})",
+                     pid, patches[pid].V.rows(), patches[pid].F.rows(),
+                     patchFiles[pid]);
     }
-
-    int num_patches = *std::max_element(seg_id.begin(), seg_id.end()) + 1;
-    spdlog::info("Segmentation loaded: {} patches.", num_patches);
 
     double platewidth = solver.platewidth;
+    double globalScale = platewidth / maxExtent;
+    spdlog::info("Global scale: {:.6f} (largest patch {} extent {:.4f} -> platewidth {})",
+                 globalScale, largestPatch, maxExtent, platewidth);
 
-    // --- Scale mesh ---
-    Eigen::MatrixXd V_scaled = V;
-    double scaleFactor = platewidth / (V_scaled.colwise().maxCoeff() - V_scaled.colwise().minCoeff()).maxCoeff();
-    V_scaled *= scaleFactor;
+    // --- Process each patch ---
+    for (int pid = 0; pid < numPatches; ++pid) {
+        Eigen::MatrixXd V_scaled = patches[pid].V * globalScale;
+        const Eigen::MatrixXi& F_patch = patches[pid].F;
+        const int nF_patch = static_cast<int>(F_patch.rows());
 
-    // --- Global output arrays ---
-    Eigen::VectorXd global_t1          = Eigen::VectorXd::Zero(nF_global);
-    Eigen::VectorXd global_t2          = Eigen::VectorXd::Zero(nF_global);
-    Eigen::VectorXd global_lam_excess  = Eigen::VectorXd::Zero(nF_global);
-    Eigen::VectorXd global_kap_excess  = Eigen::VectorXd::Zero(nF_global);
+        spdlog::info("=== Patch {} inverse design: {} vertices, {} faces ===",
+                     pid, V_scaled.rows(), nF_patch);
 
-    // --- Write target mesh ---
-    {
-        Eigen::MatrixXd V_targ = V_scaled * (1.0 / scaleFactor);
-        igl::writeOBJ(paths.output_path + model.name + "_targ.obj", V_targ, F);
-        igl::writeOBJ(morphDir + model.name + "_targ.obj", V_targ, F);
-    }
-
-    // --- Process ALL patches ---
-    for (int pid = 0; pid < num_patches; ++pid) {
-        PatchData patch = extractPatch(V_scaled, F, seg_id, pid);
-        if (patch.F.rows() == 0) {
-            spdlog::warn("Patch {} has 0 faces, skipping.", pid);
-            continue;
-        }
-        spdlog::info("Patch {}: {} faces, {} vertices", pid, patch.F.rows(), patch.V.rows());
-
+        // Parameterize
         ParameterizeResult param = parameterizeMesh(
-            patch.V, patch.F, ac.range_lam.x, ac.range_lam.y, platewidth);
+            V_scaled, F_patch, ac.range_lam.x, ac.range_lam.y, platewidth);
 
-        // Write per-patch param mesh
+        double invTotalScale = 1.0 / param.scaleFactor;
+
+        // Write param mesh (2D)
         {
             Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(param.P.rows(), 3);
             P_3d.col(0) = param.P.col(0);
             P_3d.col(1) = param.P.col(1);
-            std::string path = morphDir + "patch_" + std::to_string(pid) + "_param.obj";
-            igl::writeOBJ(path, P_3d, param.F);
+            igl::writeOBJ(morphDir + "patch_" + std::to_string(pid) + "_param.obj",
+                          P_3d, param.F);
         }
 
-        runOnPatch(
-            param.V, param.F, param.P,
-            patch.global_face_ids,
-            config, ac, pid,
-            global_t1, global_t2,
-            global_lam_excess, global_kap_excess,
-            morphDir);
-    }
+        // Inverse design
+        ManifoldSurfaceMesh mesh_p(param.F);
+        VertexPositionGeometry geom_p(mesh_p, param.V);
+        geom_p.refreshQuantities();
 
-    // --- Merged material output ---
-    {
-        auto writeMaterial = [&](const std::string& path) {
-            std::ofstream ofs(path);
+        FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, param.P, param.F);
+        std::vector<int> fixedIdx_p = findCenterFaceIndices(param.P, param.F);
+        writeCondFile(condDir + "patch_" + std::to_string(pid) + "_bound_center.txt",
+                      fixedIdx_p);
+
+        InverseDesignProblem problem;
+        problem.V         = param.V;
+        problem.F         = param.F;
+        problem.P         = param.P;
+        problem.mesh      = &mesh_p;
+        problem.geometry  = &geom_p;
+        problem.MrInv     = MrInv_p;
+        problem.fixedIdx  = fixedIdx_p;
+        problem.ac        = &ac;
+        problem.max_iter          = solver.max_iter;
+        problem.epsilon           = solver.epsilon;
+        problem.w_s               = solver.w_s;
+        problem.w_b               = solver.w_b;
+        problem.wM_kap            = solver.wM_kap;
+        problem.wL_kap            = solver.wL_kap;
+        problem.wM_lam            = solver.wM_lam;
+        problem.wL_lam            = solver.wL_lam;
+        problem.wP_kap            = solver.wP_kap;
+        problem.wP_lam            = solver.wP_lam;
+        problem.penalty_threshold = solver.penalty_threshold;
+        problem.betaP             = solver.betaP;
+        problem.patch_id          = pid;
+
+        InverseDesignResult result = runInverseDesign(problem);
+
+        // Write proj shape (rescaled to original coordinates)
+        {
+            Eigen::MatrixXd V_proj = result.V_proj * invTotalScale;
+            igl::writeOBJ(morphDir + "patch_" + std::to_string(pid) + "_proj.obj",
+                          V_proj, param.F);
+        }
+
+        // Write per-patch material
+        {
+            std::string matPath = designDir + "patch_" + std::to_string(pid) + "_material.txt";
+            std::ofstream ofs(matPath);
             ofs << "# face_id  t1  t2\n";
-            for (int fid = 0; fid < nF_global; ++fid)
-                ofs << fid << "  " << global_t1[fid] << "  " << global_t2[fid] << "\n";
-        };
-        writeMaterial(paths.output_path + model.name + "_material.txt");
-        writeMaterial(designDir + model.name + "_material.txt");
-        spdlog::info("Merged material written.");
+            for (int i = 0; i < nF_patch; ++i)
+                ofs << i << "  " << result.t1[i] << "  " << result.t2[i] << "\n";
+            spdlog::info("Patch {} material -> {}", pid, matPath);
+        }
+
+        // Write per-patch metrics
+        {
+            std::string metPath = morphDir + "patch_" + std::to_string(pid) + "_metrics.txt";
+            std::ofstream ofs(metPath);
+            ofs << "# face_id  lambda_excess  kappa_excess\n";
+            for (int i = 0; i < nF_patch; ++i)
+                ofs << i << "  " << result.lam_excess[i] << "  " << result.kap_excess[i] << "\n";
+        }
+
+        spdlog::info("=== Patch {} done (dist_proj={:.6f}) ===", pid, result.dist_proj);
     }
 
-    // --- Merged metrics output ---
-    {
-        std::string path = metricsDir + "metrics.txt";
-        std::ofstream ofs(path);
-        ofs << "# face_id  lambda_excess  kappa_excess\n";
-        for (int fid = 0; fid < nF_global; ++fid)
-            ofs << fid << "  " << global_lam_excess[fid] << "  " << global_kap_excess[fid] << "\n";
-        spdlog::info("Merged metrics -> {}", path);
-    }
-
-    spdlog::info("InverseWhole finished.");
+    spdlog::info("InverseWhole finished: {} patches processed.", numPatches);
     return 0;
 }

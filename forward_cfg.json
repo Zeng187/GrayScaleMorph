@@ -2,6 +2,10 @@
   "model": {
     "name": "circle"
   },
+  "segment": {
+    "method": "",
+    "plan": ""
+  },
   "material": {
     "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
   },
@@ -12,8 +16,8 @@
   "design": {
     "design_name": "g00g60_r000",
     "cond_name": "bound_center.txt",
-    "design_path": "../Resources/design/circle/",
-    "cond_path": "../Resources/cond/circle/"
+    "design_path": "../Resources/design/",
+    "cond_path": "../Resources/cond/"
   },
   "solver": {
     "max_iter": 200,

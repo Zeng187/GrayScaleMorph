@@ -12,6 +12,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <set>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
@@ -32,6 +33,24 @@
 using namespace geometrycentral;
 using namespace geometrycentral::surface;
 
+namespace {
+/// Convert DOF indices (3 per vertex) to unique vertex indices.
+std::vector<int> fixedDofsToVertices(const std::vector<int>& fixedIdx) {
+    std::set<int> vset;
+    for (int dof : fixedIdx) if (dof >= 0) vset.insert(dof / 3);
+    return {vset.begin(), vset.end()};
+}
+/// Write boundary condition file (3 vertex indices on one line).
+void writeCondFile(const std::string& path, const std::vector<int>& fixedIdx) {
+    auto verts = fixedDofsToVertices(fixedIdx);
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    std::ofstream ofs(path);
+    for (size_t i = 0; i < verts.size(); i++)
+        ofs << verts[i] << (i + 1 < verts.size() ? " " : "\n");
+    spdlog::info("Boundary condition written to: {}", path);
+}
+} // anonymous namespace
+
 int main(int argc, char* argv[])
 {
     (void)argc; (void)argv;
@@ -44,7 +63,6 @@ int main(int argc, char* argv[])
     }
     Config config(cfgPath);
     const auto& model  = config.model;
-    const auto& paths  = config.paths;
     const auto& solver = config.solver;
 
     if (config.patch.id < 0) {
@@ -62,11 +80,8 @@ int main(int argc, char* argv[])
     // --- Directories ---
     std::string morphDir   = config.morphDir();
     std::string designDir  = config.designDir();
-    std::string metricsDir = paths.output_path + model.name + "/";
-    std::filesystem::create_directories(paths.output_path);
     std::filesystem::create_directories(morphDir);
     std::filesystem::create_directories(designDir);
-    std::filesystem::create_directories(metricsDir);
 
     // --- Load mesh ---
     Eigen::MatrixXd V;
@@ -85,7 +100,7 @@ int main(int argc, char* argv[])
     }
 
     // --- Segmentation (required) ---
-    std::string segDir = config.segmentDir(model.name);
+    std::string segDir = config.segmentDir();
     std::string segid_path = segDir + "seg_id.txt";
     if (!std::filesystem::exists(segid_path) && !config.segment.method.empty())
         segid_path = config.segment.path + model.name + "/seg_id.txt";
@@ -144,6 +159,7 @@ int main(int argc, char* argv[])
 
     FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, param.P, param.F);
     std::vector<int> fixedIdx_p = findCenterFaceIndices(param.P, param.F);
+    writeCondFile(config.condDir() + "bound_center.txt", fixedIdx_p);
 
     InverseDesignProblem problem;
     problem.V         = param.V;
@@ -194,7 +210,7 @@ int main(int argc, char* argv[])
 
     // Metrics
     {
-        std::string path = metricsDir + "patch_" + std::to_string(target_pid) + "_metrics.txt";
+        std::string path = morphDir + "patch_" + std::to_string(target_pid) + "_metrics.txt";
         std::ofstream ofs(path);
         ofs << "# local_face_id  lambda_excess  kappa_excess\n";
         for (int i = 0; i < nF_patch; ++i) {

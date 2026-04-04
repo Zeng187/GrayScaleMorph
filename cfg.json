@@ -15,7 +15,7 @@
     "param_path": "../Resources/param/",
     "morph_path": "../Resources/morph/",
     "design_path": "../Resources/design/",
-    "output_path": "./outputs/"
+    "cond_path": "../Resources/cond/"
   },
   "solver": {
     "platewidth": 40.0,

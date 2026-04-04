@@ -264,7 +264,7 @@ void subdivideToMin(Eigen::MatrixXd& V, Eigen::MatrixXi& F, int nfMin)
 /// Find seg_id.txt path from config (primary + fallback). Returns "" if not found.
 std::string findSegIdPath(const Config& cfg)
 {
-    const std::string primary = cfg.segmentDir(cfg.model.name) + "seg_id.txt";
+    const std::string primary = cfg.segmentDir() + "seg_id.txt";
     if (std::filesystem::exists(primary))
         return primary;
 

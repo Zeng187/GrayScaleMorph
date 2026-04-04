@@ -85,10 +85,11 @@ Config::Config(const std::string& filePath)
             model.mesh_path = jsonGet<std::string>(sec, "mesh_path");
         } else {
             // Legacy: compose from InputPath + ModelName + Postfix
-            auto inputPath = jsonGet<std::string>(sec, "InputPath");
-            auto postfix   = jsonGet<std::string>(sec, "Postfix");
-            model.mesh_path = inputPath + model.name + postfix;
+            auto inputPath  = jsonGet<std::string>(sec, "InputPath");
+            auto meshSuffix = jsonGet<std::string>(sec, "Postfix");
+            model.mesh_path = inputPath + model.name + meshSuffix;
         }
+
     }
 
     // ── material ─────────────────────────────────────────────────────
@@ -134,10 +135,10 @@ Config::Config(const std::string& filePath)
         else
             paths.design_path = jsonGetOr<std::string>(sec, "DesignPath", "../Resources/design/");
 
-        if (sec.contains("output_path"))
-            paths.output_path = jsonGet<std::string>(sec, "output_path");
+        if (sec.contains("cond_path"))
+            paths.cond_path = jsonGet<std::string>(sec, "cond_path");
         else
-            paths.output_path = jsonGetOr<std::string>(sec, "OutputPath", "./outputs/");
+            paths.cond_path = jsonGetOr<std::string>(sec, "CondPath", "../Resources/cond/");
     }
 
     // ── patch (optional single-patch override) ──────────────────────
@@ -165,35 +166,45 @@ Config::Config(const std::string& filePath)
         solver.betaP             = jsonGetOr(sec, "betaP",            solver.betaP);
     }
 
-    spdlog::info("Config: model='{}', mesh='{}', patch.id={}",
-                 model.name, model.mesh_path, patch.id);
+    spdlog::info("Config: model='{}', modelDir='{}', mesh='{}', patch.id={}",
+                 model.name, modelDir(), model.mesh_path, patch.id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Path builders
 // ═══════════════════════════════════════════════════════════════════════
 
-std::string Config::segmentDir(const std::string& modelName) const
+std::string Config::modelDir() const
 {
-    std::string dirName = modelName;
+    std::string dir = model.name;
     if (!segment.method.empty())
-        dirName += "_" + segment.method;
+        dir += "_" + segment.method;
     if (!segment.plan.empty())
-        dirName += "_" + segment.plan;
-    return segment.path + dirName + "/";
+        dir += "_" + segment.plan;
+    return dir;
+}
+
+std::string Config::segmentDir() const
+{
+    return segment.path + modelDir() + "/";
 }
 
 std::string Config::paramDir() const
 {
-    return paths.param_path + model.name + "/";
+    return paths.param_path + modelDir() + "/";
 }
 
 std::string Config::morphDir() const
 {
-    return paths.morph_path + model.name + "/";
+    return paths.morph_path + modelDir() + "/";
 }
 
 std::string Config::designDir() const
 {
-    return paths.design_path + model.name + "/";
+    return paths.design_path + modelDir() + "/";
+}
+
+std::string Config::condDir() const
+{
+    return paths.cond_path + modelDir() + "/";
 }

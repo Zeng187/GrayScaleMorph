@@ -172,12 +172,15 @@ CliOptions parseCli(int argc, char* argv[])
 /// The config JSON is parsed directly (not via the shared Config class)
 /// because Forward has its own layout:
 ///
-///   model.name           — model name (used for param file naming)
+///   model.name           — model name (used for directory naming)
+///   segment.method       — optional EvolutionCut method tag (e.g. "original")
+///   segment.plan         — optional EvolutionCut plan tag (e.g. "planA")
 ///   material.curves_path — material polynomial curves JSON
-///   path.param_path      — directory containing {model}_param.obj
-///   path.output_path     — directory for forward output
+///   path.param_path      — base directory (code appends {modelDir}/)
+///   path.output_path     — base directory for forward output
 ///   design.design_name   — design scheme name (for material file naming)
-///   design.design_path   — directory containing {design_name}_material.txt
+///   design.design_path   — base directory (code appends {modelDir}/)
+///   design.cond_path     — base directory (code appends {modelDir}/)
 ///   solver.max_iter      — Newton max iterations
 ///   solver.epsilon       — convergence tolerance
 ForwardInputs resolveInputs(const CliOptions& opts)
@@ -191,39 +194,43 @@ ForwardInputs resolveInputs(const CliOptions& opts)
         nlohmann::json j;
         file >> j;
 
-        // model
+        // model + segment tags → modelDir (same naming as Config::modelDir)
         std::string modelName = j.at("model").at("name").get<std::string>();
+        std::string method    = j.count("segment") ? j["segment"].value("method", std::string("")) : std::string("");
+        std::string plan      = j.count("segment") ? j["segment"].value("plan",   std::string("")) : std::string("");
+        std::string modelDir  = modelName;
+        if (!method.empty()) modelDir += "_" + method;
+        if (!plan.empty())   modelDir += "_" + plan;
 
         // material curves
         inputs.curvesPath = j.at("material").at("curves_path").get<std::string>();
 
-        // paths: param input + forward output
+        // paths: param input + forward output (base dirs, model subdir appended by code)
         std::string paramPath  = j.at("path").value("param_path", "../Resources/param/");
         std::string outputPath = j.at("path").value("output_path", "../Resources/forward/");
-        // Ensure trailing slash
         if (!paramPath.empty() && paramPath.back() != '/') paramPath += '/';
         if (!outputPath.empty() && outputPath.back() != '/') outputPath += '/';
 
-        inputs.paramPath = paramPath + modelName + "/" + modelName + "_param.obj";
+        inputs.paramPath = paramPath + modelDir + "/" + modelName + "_param.obj";
 
-        // design: material input
+        // design: material input (base dir, model subdir appended by code)
         std::string designName = j.at("design").at("design_name").get<std::string>();
-        std::string designPath = j.at("design").at("design_path").get<std::string>();
+        std::string designPath = j.at("design").value("design_path", "../Resources/design/");
         if (!designPath.empty() && designPath.back() != '/') designPath += '/';
 
-        inputs.materialPath = designPath + designName + ".txt";
+        inputs.materialPath = designPath + modelDir + "/" + designName + ".txt";
 
         // output
         inputs.outputPath = !opts.outputPath.empty()
             ? opts.outputPath
-            : outputPath + modelName + "/" + designName + "_forward.obj";
+            : outputPath + modelDir + "/" + designName + "_forward.obj";
 
-        // design: boundary condition
-        if (j.at("design").contains("cond_name") && j.at("design").contains("cond_path")) {
+        // design: boundary condition (base dir, model subdir appended by code)
+        if (j.at("design").contains("cond_name")) {
             std::string condName = j["design"]["cond_name"].get<std::string>();
-            std::string condPath = j["design"]["cond_path"].get<std::string>();
+            std::string condPath = j["design"].value("cond_path", "../Resources/cond/");
             if (!condPath.empty() && condPath.back() != '/') condPath += '/';
-            inputs.condPath = condPath + condName;
+            inputs.condPath = condPath + modelDir + "/" + condName;
         }
 
         // solver
