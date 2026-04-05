@@ -11,6 +11,7 @@
 #include "material.hpp"
 #include "morphmesh.hpp"
 #include "newton.h"
+#include "rigid_align.h"
 
 using namespace geometrycentral;
 using namespace geometrycentral::surface;
@@ -228,6 +229,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
             newton(geometry, Vr_proj, simFunc_proj,
                    prob.max_iter, prob.epsilon, false, prob.fixedIdx);
 
+            Vr_proj = rigidAlign(Vr_proj, targetV);
             double dist_proj = (Vr_proj - targetV).squaredNorm() / nV;
             logProjectedDistance(prob.patch_id, k, dist_proj);
         }
@@ -296,16 +298,21 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
            prob.max_iter, prob.epsilon, true, prob.fixedIdx);
 
     // =====================================================================
-    // 6. Compute error metrics
+    // 6. Rigid-align V_proj to target, then compute error metrics
     // =====================================================================
+    //    V_proj is anchored at the flat-plate center (z=0), while targetV
+    //    is the 3D target shape — they differ by a rigid body transform.
+    //    Align first so that dist_proj reflects only the design error.
+    result.V_proj = rigidAlign(result.V_proj, targetV);
+
     result.dist_inv  = (result.V_inv  - targetV).squaredNorm() / nV;
     result.dist_proj = (result.V_proj - targetV).squaredNorm() / nV;
 
     if (prob.patch_id >= 0)
-        spdlog::info("Patch {}: Final projected distance: {:.6f}",
+        spdlog::info("Patch {}: Final projected distance (aligned): {:.6f}",
                      prob.patch_id, result.dist_proj);
     else
-        spdlog::info("Final projected distance: {:.6f}", result.dist_proj);
+        spdlog::info("Final projected distance (aligned): {:.6f}", result.dist_proj);
 
     return result;
 }

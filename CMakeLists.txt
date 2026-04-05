@@ -23,6 +23,7 @@ add_library(grayscale_core STATIC
   core/material.hpp           core/material.cpp
   core/output.hpp             core/output.cpp
   core/patch_utils.h          core/patch_utils.cpp
+  core/rigid_align.h          core/rigid_align.cpp
   core/common.hpp             core/solvers.h            core/timer.h
   core/parameterization.h     core/parameterization.cpp
   core/parameterize_pipeline.h core/parameterize_pipeline.cpp
