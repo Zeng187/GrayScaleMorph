@@ -1,15 +1,15 @@
 {
   "model": {
-    "name": "hemisphere",
-    "mesh_path": "../Resources/meshes/hemisphere.obj"
+    "name": "cup",
+    "mesh_path": "../Resources/meshes/cup.obj"
   },
   "material": {
     "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
   },
   "segment": {
     "path": "../Resources/segment/",
-    "method": "",
-    "plan": ""
+    "method": "original",
+    "plan": "planA"
   },
   "paths": {
     "param_path": "../Resources/param/",
@@ -18,7 +18,7 @@
     "cond_path": "../Resources/cond/"
   },
   "patch": {
-    "id": 0
+    "id": 1
   },
   "solver": {
     "platewidth": 40.0,

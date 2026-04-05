@@ -124,8 +124,7 @@ ParameterizeResult parameterizeMesh(
     const Eigen::MatrixXd& V_in,
     const Eigen::MatrixXi& F_in,
     double lambda_min,
-    double lambda_max,
-    double platewidth)
+    double lambda_max)
 {
     using namespace geometrycentral::surface;
 
@@ -153,30 +152,23 @@ ParameterizeResult parameterizeMesh(
 
     // 6. Gauge shift: globally scale P so that the stretch distribution
     //    lands inside the material window [lambda_min, lambda_max].
+    //    Only P is scaled — V stays at the caller's coordinate system so that
+    //    physical curvature κ and thickness h remain in consistent units.
     const double t = computeGaugeShiftScale(V, F, P, lambda_min, lambda_max);
     if (t > 0.0 && std::isfinite(t) && std::abs(t - 1.0) > 1e-12) {
         P /= t;
         spdlog::info("Gauge shift t={:.6f}, P scaled by {:.6f}", t, 1.0 / t);
     }
 
-    // 7. Platewidth scaling: fit parameterization bbox to platewidth,
-    //    apply the same factor to V so that V and P stay in the same scale.
-    //    This ensures the deformation gradient F = M(V) * MrInv(P) has correct
-    //    stretch magnitudes relative to the material window.
-    const double scale =
-        platewidth / (P.colwise().maxCoeff() - P.colwise().minCoeff()).maxCoeff();
-    V *= scale;
-    P *= scale;
-
-    // 8. Build geometry-central mesh and geometry from the scaled V, F
+    // 7. Build geometry-central mesh and geometry from V, F (unchanged scale)
     auto mesh     = std::make_unique<ManifoldSurfaceMesh>(F);
     auto geometry = std::make_unique<VertexPositionGeometry>(*mesh, V);
     geometry->refreshQuantities();
 
-    // 9. Precompute per-face inverse rest-shape from the 2D parameterization
+    // 8. Precompute per-face inverse rest-shape from the 2D parameterization
     FaceData<Eigen::Matrix2d> MrInv = precomputeMrInv(*mesh, P, F);
 
-    // 10. Identify centre-face DOF indices for rigid-body removal
+    // 9. Identify centre-face DOF indices for rigid-body removal
     std::vector<int> fixedIdx = findCenterFaceIndices(P, F);
 
     // Pack everything into the result struct
@@ -188,7 +180,6 @@ ParameterizeResult parameterizeMesh(
     result.geometry    = std::move(geometry);
     result.MrInv       = std::move(MrInv);
     result.fixedIdx    = std::move(fixedIdx);
-    result.scaleFactor = scale;
 
     return result;
 }

@@ -224,8 +224,7 @@ int runPerPatchParam(const Config&          config,
 
         ParameterizeResult result = parameterizeMesh(
             patch.V, patch.F,
-            ac.range_lam.x, ac.range_lam.y,
-            platewidth);
+            ac.range_lam.x, ac.range_lam.y);
 
         const std::string paramPath =
             paramDir + "patch_" + std::to_string(pid) + "_param.obj";
@@ -321,10 +320,7 @@ int main(int argc, char* argv[])
 
     ParameterizeResult result = parameterizeMesh(
         V, F,
-        ac.range_lam.x, ac.range_lam.y,
-        config.solver.platewidth);
-
-    const double totalScale = scaleFactor1 * result.scaleFactor;
+        ac.range_lam.x, ac.range_lam.y);
 
     // Write 2D parameterized mesh
     const std::string paramPath = paramDir + config.model.name + "_param.obj";
@@ -332,7 +328,7 @@ int main(int argc, char* argv[])
     spdlog::info("Parameterized mesh written to: {}", paramPath);
 
     // Write target at original (unscaled) coordinates
-    Eigen::MatrixXd V_targ = result.V * (1.0 / totalScale);
+    Eigen::MatrixXd V_targ = result.V * (1.0 / scaleFactor1);
     const std::string targPath = paramDir + config.model.name + "_targ.obj";
     igl::writeOBJ(targPath, V_targ, result.F);
     spdlog::info("Target mesh written to: {}", targPath);

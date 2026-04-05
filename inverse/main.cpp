@@ -5,7 +5,6 @@
 
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
-#include <igl/loop.h>
 #include <fstream>
 #include <filesystem>
 #include <vector>
@@ -27,6 +26,7 @@
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "output.hpp"
+#include "patch_utils.h"
 #include "inverse_design.h"
 
 using namespace geometrycentral;
@@ -129,10 +129,9 @@ int main(int argc, char* argv[])
             spdlog::error("Cannot read patch: {}", patchFiles[pid]);
             return -1;
         }
+        // Linear subdivide per-patch if below nf_min (preserves geometry exactly)
         while (static_cast<int>(patches[pid].F.rows()) < solver.nf_min) {
-            Eigen::MatrixXd tV = patches[pid].V;
-            Eigen::MatrixXi tF = patches[pid].F;
-            igl::loop(tV, tF, patches[pid].V, patches[pid].F);
+            linearSubdivide(patches[pid].V, patches[pid].F);
         }
         double ext = (patches[pid].V.colwise().maxCoeff()
                     - patches[pid].V.colwise().minCoeff()).maxCoeff();
@@ -142,10 +141,9 @@ int main(int argc, char* argv[])
         }
     }
 
-    double platewidth = solver.platewidth;
-    double globalScale = platewidth / maxExtent;
+    double globalScale = solver.platewidth / maxExtent;
     spdlog::info("Global scale: {:.6f} (largest patch {} extent {:.4f} -> platewidth {})",
-                 globalScale, largestPatch, maxExtent, platewidth);
+                 globalScale, largestPatch, maxExtent, solver.platewidth);
 
     // --- Process target patch only ---
     Eigen::MatrixXd V_scaled = patches[target_pid].V * globalScale;
@@ -156,16 +154,15 @@ int main(int argc, char* argv[])
                  target_pid, V_scaled.rows(), nF_patch);
 
     ParameterizeResult param = parameterizeMesh(
-        V_scaled, F_patch, ac.range_lam.x, ac.range_lam.y, platewidth);
-
-    double invTotalScale = 1.0 / param.scaleFactor;
+        V_scaled, F_patch, ac.range_lam.x, ac.range_lam.y);
 
     // Write param mesh (2D)
     {
         Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(param.P.rows(), 3);
         P_3d.col(0) = param.P.col(0);
         P_3d.col(1) = param.P.col(1);
-        igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_param.obj",
+        std::filesystem::create_directories(config.paramDir());
+        igl::writeOBJ(config.paramDir() + "patch_" + std::to_string(target_pid) + "_param.obj",
                       P_3d, param.F);
     }
 
@@ -204,12 +201,9 @@ int main(int argc, char* argv[])
 
     InverseDesignResult result = runInverseDesign(problem);
 
-    // Write proj shape (rescaled to original coordinates)
-    {
-        Eigen::MatrixXd V_proj = result.V_proj * invTotalScale;
-        igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_proj.obj",
-                      V_proj, param.F);
-    }
+    // Write proj shape (already at globalScale, no rescaling needed)
+    igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_proj.obj",
+                  result.V_proj, param.F);
 
     // Write per-patch material
     {

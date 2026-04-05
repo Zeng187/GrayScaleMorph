@@ -318,7 +318,7 @@ PieceResult evaluatePiece(
     // -- Parameterization --------------------------------------------------
     ParameterizeResult param = parameterizeMesh(
         V_scaled, F_in,
-        bounds.lambda_min, bounds.lambda_max, bounds.platewidth);
+        bounds.lambda_min, bounds.lambda_max);
 
     if (!param.mesh || !param.geometry)
         throw std::runtime_error("parameterizeMesh returned null mesh/geometry.");

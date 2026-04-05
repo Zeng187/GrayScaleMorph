@@ -1,6 +1,7 @@
 #include "patch_utils.h"
 
 #include <fstream>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <stdexcept>
@@ -52,6 +53,45 @@ PatchData extractPatch(const Eigen::MatrixXd& V,
     }
 
     return patch;
+}
+
+void linearSubdivide(Eigen::MatrixXd& V, Eigen::MatrixXi& F)
+{
+    const int nV_old = static_cast<int>(V.rows());
+    const int nF_old = static_cast<int>(F.rows());
+    const int nCols  = static_cast<int>(V.cols());
+
+    std::map<std::pair<int,int>, int> edgeMid;
+    int nextVid = nV_old;
+
+    // Upper bound: each face has 3 edges, each shared by ≤2 faces
+    Eigen::MatrixXd V_new(nV_old + 3 * nF_old, nCols);
+    V_new.topRows(nV_old) = V;
+
+    auto getMid = [&](int a, int b) -> int {
+        auto key = std::make_pair(std::min(a, b), std::max(a, b));
+        auto it = edgeMid.find(key);
+        if (it != edgeMid.end()) return it->second;
+        int mid = nextVid++;
+        V_new.row(mid) = 0.5 * (V.row(a) + V.row(b));
+        edgeMid[key] = mid;
+        return mid;
+    };
+
+    Eigen::MatrixXi F_new(4 * nF_old, 3);
+    for (int fi = 0; fi < nF_old; ++fi) {
+        int v0 = F(fi, 0), v1 = F(fi, 1), v2 = F(fi, 2);
+        int m01 = getMid(v0, v1);
+        int m12 = getMid(v1, v2);
+        int m20 = getMid(v2, v0);
+        F_new.row(4 * fi + 0) << v0,  m01, m20;
+        F_new.row(4 * fi + 1) << m01, v1,  m12;
+        F_new.row(4 * fi + 2) << m20, m12, v2;
+        F_new.row(4 * fi + 3) << m01, m12, m20;
+    }
+
+    V = V_new.topRows(nextVid);
+    F = std::move(F_new);
 }
 
 std::vector<int> loadSegId(const std::string& path)

@@ -17,3 +17,8 @@ PatchData extractPatch(const Eigen::MatrixXd& V,
                        int patch_id);
 
 std::vector<int> loadSegId(const std::string& path);
+
+/// Linear midpoint subdivision: split each triangle into 4 sub-triangles.
+/// Edge midpoints are placed at the linear average of endpoints (no smoothing).
+/// Preserves geometry exactly, unlike Loop subdivision.
+void linearSubdivide(Eigen::MatrixXd& V, Eigen::MatrixXi& F);
