@@ -1,7 +1,7 @@
 /// Inverse — single-patch inverse design (debug entry point).
 ///
-/// Same logic as InverseWhole but only processes the patch specified by
-/// patch.id in inverse_cfg.json. Useful for debugging individual patches.
+/// Same three-phase pipeline as InverseWhole but only processes the patch
+/// specified by patch.id. Uses the same globalScale (from all patches).
 
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <regex>
 #include <set>
+#include <cfloat>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
@@ -64,6 +65,25 @@ std::vector<std::string> discoverPatches(const std::string& patchesDir) {
     return paths;
 }
 
+std::pair<Eigen::MatrixXd, double> pcaAlignP(const Eigen::MatrixXd& P)
+{
+    Eigen::RowVector2d center = P.colwise().mean();
+    Eigen::MatrixXd Pc = P.rowwise() - center;
+
+    Eigen::Matrix2d C = Pc.transpose() * Pc / static_cast<double>(Pc.rows());
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eig(C);
+
+    Eigen::Matrix2d Q = eig.eigenvectors();
+    if (eig.eigenvalues()(0) > eig.eigenvalues()(1))
+        Q.col(0).swap(Q.col(1));
+    if (Q.determinant() < 0.0)
+        Q.col(1) *= -1.0;
+
+    Eigen::MatrixXd P_rot = Pc * Q;
+    double xExtent = P_rot.col(0).maxCoeff() - P_rot.col(0).minCoeff();
+    return {P_rot, xExtent};
+}
+
 } // anonymous namespace
 
 int main(int argc, char* argv[])
@@ -99,6 +119,7 @@ int main(int argc, char* argv[])
     std::filesystem::create_directories(morphDir);
     std::filesystem::create_directories(designDir);
     std::filesystem::create_directories(condDir);
+    std::filesystem::create_directories(config.paramDir());
 
     // --- Discover patches ---
     std::string patchesDir = config.segmentDir() + "patches/";
@@ -118,68 +139,87 @@ int main(int argc, char* argv[])
     }
     spdlog::info("Single-patch debug mode: patch {} of {} total.", target_pid, numPatches);
 
-    // --- Load all patches for consistent scale ---
-    struct PatchMesh { Eigen::MatrixXd V; Eigen::MatrixXi F; };
-    std::vector<PatchMesh> patches(numPatches);
-    double maxExtent = 0.0;
-    int largestPatch = 0;
+    // =====================================================================
+    // Phase 1: Parameterize ALL patches (gauge shift only, no V scaling)
+    // =====================================================================
+    struct PatchParam {
+        Eigen::MatrixXd V;
+        Eigen::MatrixXi F;
+        Eigen::MatrixXd P;
+    };
+    std::vector<PatchParam> patchParams(numPatches);
 
     for (int pid = 0; pid < numPatches; ++pid) {
-        if (!igl::readOBJ(patchFiles[pid], patches[pid].V, patches[pid].F)) {
+        Eigen::MatrixXd V_raw;
+        Eigen::MatrixXi F_raw;
+        if (!igl::readOBJ(patchFiles[pid], V_raw, F_raw)) {
             spdlog::error("Cannot read patch: {}", patchFiles[pid]);
             return -1;
         }
-        // Linear subdivide per-patch if below nf_min (preserves geometry exactly)
-        while (static_cast<int>(patches[pid].F.rows()) < solver.nf_min) {
-            linearSubdivide(patches[pid].V, patches[pid].F);
-        }
-        double ext = (patches[pid].V.colwise().maxCoeff()
-                    - patches[pid].V.colwise().minCoeff()).maxCoeff();
-        if (ext > maxExtent) {
-            maxExtent = ext;
-            largestPatch = pid;
+        while (static_cast<int>(F_raw.rows()) < solver.nf_min)
+            linearSubdivide(V_raw, F_raw);
+
+        ParameterizeResult param = parameterizeMesh(
+            V_raw, F_raw, ac.range_lam.x, ac.range_lam.y);
+
+        patchParams[pid].V = std::move(param.V);
+        patchParams[pid].F = std::move(param.F);
+        patchParams[pid].P = std::move(param.P);
+    }
+
+    // =====================================================================
+    // Phase 2: PCA-rotate each P, compute globalScale
+    // =====================================================================
+    double globalScale = DBL_MAX;
+    int constrainingPatch = 0;
+
+    for (int pid = 0; pid < numPatches; ++pid) {
+        auto [P_rot, xExtent] = pcaAlignP(patchParams[pid].P);
+        patchParams[pid].P = std::move(P_rot);
+
+        double sf = solver.platewidth / xExtent;
+        if (sf < globalScale) {
+            globalScale = sf;
+            constrainingPatch = pid;
         }
     }
 
-    double globalScale = solver.platewidth / maxExtent;
-    spdlog::info("Global scale: {:.6f} (largest patch {} extent {:.4f} -> platewidth {})",
-                 globalScale, largestPatch, maxExtent, solver.platewidth);
+    spdlog::info("Global scale: {:.6f} (constrained by patch {})", globalScale, constrainingPatch);
 
-    // --- Process target patch only ---
-    Eigen::MatrixXd V_scaled = patches[target_pid].V * globalScale;
-    const Eigen::MatrixXi& F_patch = patches[target_pid].F;
+    // =====================================================================
+    // Phase 3: Process target patch only
+    // =====================================================================
+    Eigen::MatrixXd V_scaled = patchParams[target_pid].V * globalScale;
+    Eigen::MatrixXd P_scaled = patchParams[target_pid].P * globalScale;
+    const Eigen::MatrixXi& F_patch = patchParams[target_pid].F;
     const int nF_patch = static_cast<int>(F_patch.rows());
 
     spdlog::info("=== Patch {} inverse design: {} vertices, {} faces ===",
                  target_pid, V_scaled.rows(), nF_patch);
 
-    ParameterizeResult param = parameterizeMesh(
-        V_scaled, F_patch, ac.range_lam.x, ac.range_lam.y);
-
-    // Write param mesh (2D)
+    // Write param mesh
     {
-        Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(param.P.rows(), 3);
-        P_3d.col(0) = param.P.col(0);
-        P_3d.col(1) = param.P.col(1);
-        std::filesystem::create_directories(config.paramDir());
+        Eigen::MatrixXd P_3d = Eigen::MatrixXd::Zero(P_scaled.rows(), 3);
+        P_3d.col(0) = P_scaled.col(0);
+        P_3d.col(1) = P_scaled.col(1);
         igl::writeOBJ(config.paramDir() + "patch_" + std::to_string(target_pid) + "_param.obj",
-                      P_3d, param.F);
+                      P_3d, F_patch);
     }
 
-    // Inverse design
-    ManifoldSurfaceMesh mesh_p(param.F);
-    VertexPositionGeometry geom_p(mesh_p, param.V);
+    // Build geometry-central structures from scaled V and P
+    ManifoldSurfaceMesh mesh_p(F_patch);
+    VertexPositionGeometry geom_p(mesh_p, V_scaled);
     geom_p.refreshQuantities();
 
-    FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, param.P, param.F);
-    std::vector<int> fixedIdx_p = findCenterFaceIndices(param.P, param.F);
+    FaceData<Eigen::Matrix2d> MrInv_p = precomputeMrInv(mesh_p, P_scaled, F_patch);
+    std::vector<int> fixedIdx_p = findCenterFaceIndices(P_scaled, F_patch);
     writeCondFile(condDir + "patch_" + std::to_string(target_pid) + "_bound_center.txt",
                   fixedIdx_p);
 
     InverseDesignProblem problem;
-    problem.V         = param.V;
-    problem.F         = param.F;
-    problem.P         = param.P;
+    problem.V         = V_scaled;
+    problem.F         = F_patch;
+    problem.P         = P_scaled;
     problem.mesh      = &mesh_p;
     problem.geometry  = &geom_p;
     problem.MrInv     = MrInv_p;
@@ -201,9 +241,11 @@ int main(int argc, char* argv[])
 
     InverseDesignResult result = runInverseDesign(problem);
 
-    // Write proj shape (already at globalScale, no rescaling needed)
+    // Write target and proj
+    igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_target.obj",
+                  V_scaled, F_patch);
     igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_proj.obj",
-                  result.V_proj, param.F);
+                  result.V_proj, F_patch);
 
     // Write per-patch material
     {
