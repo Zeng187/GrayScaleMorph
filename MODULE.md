@@ -296,8 +296,6 @@ E(t1,t2)     = 0.5 * (modulus(t1) + modulus(t2))
 - Inverse 采用 **lagged-E** 方案：每 stage 开始前用当前 (lambda, kappa) 投到最近 feasible 取 idx，从 `ac.feasible_modl[idx]` 读 E，stage 内冻结传给 adjoint + Newton；下一 stage 重算
 - Morphmesh `ComputeElasticEnergy` 也接 `E_face`，VTK 诊断热点与主求解一致
 
-**死代码**：`simulationFunctionWithMaterial` / `adjointFunctionWithMaterial_Lay1/2` / `sparse_gauss_newton_lay1/2` 仍是旧标量 E，但无活跃调用者，待后续删除。
-
 ## 逆设计 Pipeline
 
 ### 目标函数
