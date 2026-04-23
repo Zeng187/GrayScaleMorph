@@ -27,6 +27,7 @@ public:
 
     // ── Segmentation ─────────────────────────────────────────────────
     struct Segment {
+        bool enabled = true; ///< true = read segmented patches; false = use mesh_path as single patch
         std::string path;    ///< base directory for segment outputs
         std::string method;  ///< distortion method tag (may be empty)
         std::string plan;    ///< plan tag (may be empty)
@@ -42,7 +43,7 @@ public:
 
     // ── Optional single-patch override ───────────────────────────────
     struct Patch {
-        int id = -1;  ///< patch id to process; < 0 means process all patches
+        int id = -1;  ///< target patch id; < 0 = default (Inverse: required when segmented, auto-0 when unsegmented)
     } patch;
 
     // ── Solver parameters ────────────────────────────────────────────
@@ -65,7 +66,8 @@ public:
 
     // ── Convenience path builders ────────────────────────────────────
 
-    /// Model directory name: model.name[_method][_plan] — same naming as segmentDir.
+    /// Model directory name: model.name[_method][_plan] when segmentation is enabled,
+    /// otherwise just model.name.
     std::string modelDir() const;
 
     /// Build segment directory: segment.path / modelDir() /

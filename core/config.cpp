@@ -104,10 +104,12 @@ Config::Config(const std::string& filePath)
     // ── segment ──────────────────────────────────────────────────────
     {
         const auto& sec = findSection(j, {"segment", "Resource"});
+        segment.enabled = jsonGetOr<bool>(sec, "enabled", true);
+
         if (sec.contains("path"))
             segment.path = jsonGet<std::string>(sec, "path");
         else
-            segment.path = jsonGet<std::string>(sec, "SegmentPath");        // legacy
+            segment.path = jsonGetOr<std::string>(sec, "SegmentPath", ""); // legacy; empty OK when disabled
 
         segment.method = jsonGetOr<std::string>(sec, "method", "");
         if (segment.method.empty())
@@ -116,6 +118,9 @@ Config::Config(const std::string& filePath)
         segment.plan = jsonGetOr<std::string>(sec, "plan", "");
         if (segment.plan.empty())
             segment.plan = jsonGetOr<std::string>(sec, "Plan", "");
+
+        if (segment.enabled && segment.path.empty())
+            throw std::runtime_error("segment.path is required when segment.enabled=true");
     }
 
     // ── paths (shared resource directories) ─────────────────────────
@@ -166,8 +171,8 @@ Config::Config(const std::string& filePath)
         solver.betaP             = jsonGetOr(sec, "betaP",            solver.betaP);
     }
 
-    spdlog::info("Config: model='{}', modelDir='{}', mesh='{}', patch.id={}",
-                 model.name, modelDir(), model.mesh_path, patch.id);
+    spdlog::info("Config: model='{}', modelDir='{}', mesh='{}', segment.enabled={}, patch.id={}",
+                 model.name, modelDir(), model.mesh_path, segment.enabled, patch.id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -177,6 +182,8 @@ Config::Config(const std::string& filePath)
 std::string Config::modelDir() const
 {
     std::string dir = model.name;
+    if (!segment.enabled)
+        return dir;
     if (!segment.method.empty())
         dir += "_" + segment.method;
     if (!segment.plan.empty())

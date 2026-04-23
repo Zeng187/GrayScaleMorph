@@ -100,12 +100,16 @@ int main(int argc, char* argv[])
     const auto& model  = config.model;
     const auto& solver = config.solver;
 
-    if (config.patch.id < 0) {
+    int target_pid = config.patch.id;
+    if (!config.segment.enabled && target_pid < 0) {
+        target_pid = 0; // single-patch mode: default to the only patch
+        spdlog::info("Segmentation disabled, patch.id unset — defaulting to 0.");
+    }
+    if (config.segment.enabled && target_pid < 0) {
         spdlog::error("patch.id must be >= 0 in inverse_cfg.json. "
                       "For all-patches mode, use InverseWhole.");
         return -1;
     }
-    const int target_pid = config.patch.id;
 
     // --- Material ---
     ActiveComposite ac(config.material.curves_path);
@@ -121,22 +125,37 @@ int main(int argc, char* argv[])
     std::filesystem::create_directories(condDir);
     std::filesystem::create_directories(config.paramDir());
 
-    // --- Discover patches ---
-    std::string patchesDir = config.segmentDir() + "patches/";
-    if (!std::filesystem::is_directory(patchesDir)) {
-        spdlog::error("Patches directory not found: {}", patchesDir);
-        return -1;
+    // --- Discover patch inputs ---
+    std::vector<std::string> patchFiles;
+    if (config.segment.enabled) {
+        std::string patchesDir = config.segmentDir() + "patches/";
+        if (!std::filesystem::is_directory(patchesDir)) {
+            spdlog::error("Patches directory not found: {}", patchesDir);
+            return -1;
+        }
+        patchFiles = discoverPatches(patchesDir);
+        if (patchFiles.empty()) {
+            spdlog::error("No patch_*.obj files found in: {}", patchesDir);
+            return -1;
+        }
+        if (target_pid >= static_cast<int>(patchFiles.size())) {
+            spdlog::error("patch.id={} but only {} patches found.", target_pid, patchFiles.size());
+            return -1;
+        }
+    } else {
+        if (model.mesh_path.empty()) {
+            spdlog::error("segment.enabled=false but model.mesh_path is empty.");
+            return -1;
+        }
+        if (target_pid != 0) {
+            spdlog::error("segment.enabled=false: only patch 0 is valid, got patch.id={}.", target_pid);
+            return -1;
+        }
+        patchFiles.push_back(model.mesh_path);
+        spdlog::info("Segmentation disabled — treating model mesh as single patch: {}",
+                     model.mesh_path);
     }
-    std::vector<std::string> patchFiles = discoverPatches(patchesDir);
     int numPatches = static_cast<int>(patchFiles.size());
-    if (numPatches == 0) {
-        spdlog::error("No patch_*.obj files found in: {}", patchesDir);
-        return -1;
-    }
-    if (target_pid >= numPatches) {
-        spdlog::error("patch.id={} but only {} patches found.", target_pid, numPatches);
-        return -1;
-    }
     spdlog::info("Single-patch debug mode: patch {} of {} total.", target_pid, numPatches);
 
     // =====================================================================
@@ -241,9 +260,11 @@ int main(int argc, char* argv[])
 
     InverseDesignResult result = runInverseDesign(problem);
 
-    // Write target and proj
+    // Write target, inv (continuous optimum), and proj (after material projection)
     igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_target.obj",
                   V_scaled, F_patch);
+    igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_inv.obj",
+                  result.V_inv, F_patch);
     igl::writeOBJ(morphDir + "patch_" + std::to_string(target_pid) + "_proj.obj",
                   result.V_proj, F_patch);
 

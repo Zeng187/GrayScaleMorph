@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cmath>
+#include <limits>
 #include "common.hpp"
 #include<Eigen/Core>
 
@@ -53,15 +54,31 @@ inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2
 	return T(1.5) * (val_2 - val_1) / T(thickness);
 }
 
-// Find the index of the nearest feasible (kap, lam) pair to (kap, lam) jointly
+// Find the feasible index that minimizes kappa-priority weighted distance.
+//
+// Uses inverse energy ratio to counteract stretching dominance:
+//   W_kap = 3 * w_s / (w_b * h^2)
+//   d = (lam - lam_f)^2 + W_kap * (kap - kap_f)^2
+//
+// Rationale: in the shell energy, stretching (∝ w_s) dominates bending
+// (∝ w_b * h^2/3). For shape fidelity, curvature (kappa) matters more
+// than metric (lambda), so we invert the energy ratio to weight kappa
+// more heavily in the projection.
 inline int find_feasible_idx(const std::vector<double>& feas_kap,
                               const std::vector<double>& feas_lam,
-                              double kap, double lam)
+                              double kap, double lam,
+                              double h, double w_s, double w_b)
 {
+    const double W_kap = 3.0 * w_s / (w_b * h * h);
+
     int best_i = 0;
-    double best_d = std::pow(kap - feas_kap[0], 2) + std::pow(lam - feas_lam[0], 2);
-    for (size_t i = 1; i < feas_kap.size(); ++i) {
-        double d = std::pow(kap - feas_kap[i], 2) + std::pow(lam - feas_lam[i], 2);
+    double best_d = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < feas_kap.size(); ++i) {
+        double dl = lam - feas_lam[i];
+        double dk = kap - feas_kap[i];
+
+        double d = dl * dl + W_kap * dk * dk;
+
         if (d < best_d) { best_d = d; best_i = static_cast<int>(i); }
     }
     return best_i;
@@ -213,4 +230,17 @@ public:
 
 
 };
+
+// Reference modulus used to non-dimensionalize per-face Young's modulus in
+// the energy assembly. Returning the mean of the feasible set means a plate
+// made of the middle-tone material produces E_face ~= 1, which preserves the
+// numerical regime (energy magnitude / epsilon / line search) of the legacy
+// scalar-E=1 code path. Returns 1.0 as a safe fallback for degenerate inputs.
+inline double referenceModulus(const ActiveComposite& ac) {
+	if (ac.feasible_modl.empty()) return 1.0;
+	double sum = 0.0;
+	for (double v : ac.feasible_modl) sum += v;
+	const double mean = sum / static_cast<double>(ac.feasible_modl.size());
+	return mean > 0.0 ? mean : 1.0;
+}
 

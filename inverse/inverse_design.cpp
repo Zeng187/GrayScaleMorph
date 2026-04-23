@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <spdlog/spdlog.h>
+#include <spdlog/fmt/fmt.h>
 
 #include "boundary_utils.h"
 #include "functions.h"
@@ -69,14 +70,16 @@ void logStageFinish(int patch_id, const char* tag, int stage,
                      stage, tag, distance, penalty_kap, penalty_lam);
 }
 
-/// Log projected distance after each stage.
+/// Log projected distance after each stage (highlighted + trailing blank line).
 void logProjectedDistance(int patch_id, int stage, double dist_proj)
 {
     if (patch_id >= 0)
-        spdlog::info("Patch {} Stage {}, Projected distance: {:.6f}",
+        spdlog::info("\033[1;33m>>> Patch {} Stage {}, Projected distance: {:.6f} <<<\033[0m",
                      patch_id, stage, dist_proj);
     else
-        spdlog::info("Stage {}, Projected distance: {:.6f}", stage, dist_proj);
+        spdlog::info("\033[1;33m>>> Stage {}, Projected distance: {:.6f} <<<\033[0m",
+                     stage, dist_proj);
+    fmt::print("\n");
 }
 
 } // anonymous namespace
@@ -92,13 +95,36 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
         throw std::invalid_argument(
             "runInverseDesign: mesh, geometry, and ac must be non-null.");
 
-    // Hardcoded material constants (dimensionless reference stiffness).
-    constexpr double E  = 1.0;
+    // Poisson ratio is kept globally constant (same elastomer family); Young's
+    // modulus is per-face (see E_face below) and driven by the material curve
+    // E(t1, t2). Both are dimensionless: E is normalised by E_ref so that the
+    // numerical regime matches the legacy scalar-E=1 code.
     constexpr double nu = 0.5;
 
     ManifoldSurfaceMesh&    mesh     = *prob.mesh;
     VertexPositionGeometry& geometry = *prob.geometry;
     const ActiveComposite&  ac       = *prob.ac;
+
+    const double E_ref = referenceModulus(ac);
+
+    // Build per-face modulus by projecting the current continuous (lambda, kappa)
+    // onto the nearest feasible (t1, t2) and reading the corresponding E from the
+    // feasible set (already normalised by E_ref). This is the lagged/frozen-E
+    // scheme: within a Newton stage E_face is treated as constant; it is only
+    // refreshed between stages so each Gauss-Newton step still sees a stationary
+    // quadratic model.
+    auto buildEFaceFromState = [&](const FaceData<double>& lam_pf,
+                                   const FaceData<double>& kap_pf) -> FaceData<double> {
+        FaceData<double> E_face(mesh);
+        for (Face f : mesh.faces()) {
+            const int idx = find_feasible_idx(
+                ac.feasible_kapp, ac.feasible_lamb,
+                kap_pf[f], lam_pf[f],
+                ac.thickness, prob.w_s, prob.w_b);
+            E_face[f] = ac.feasible_modl[idx] / E_ref;
+        }
+        return E_face;
+    };
 
     // Build boundary-face reference mapping for shape operator computation.
     std::vector<bool> is_boundary;
@@ -110,7 +136,11 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     // =====================================================================
     // 1. Compute target morphing parameters (lambda, kappa)
     // =====================================================================
-    Morphmesh morph(prob.V, prob.P, prob.F, E, nu);
+    // Morphmesh here is used purely as a container for (lambda, kappa) fields
+    // via ComputeMorphophing / SetMorphophing — its scalar E/nu slots are
+    // only consumed by ComputeElasticEnergy, which this pipeline does not call.
+    // Passing 1.0 / nu keeps the ctor happy without affecting results.
+    Morphmesh morph(prob.V, prob.P, prob.F, 1.0, nu);
 
     Morphmesh::ComputeMorphophing(
         geometry, prob.V, prob.F, nV, nF,
@@ -168,16 +198,18 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
         logStageStart(prob.patch_id, "OptKap", k, wP_kap, wP_lam);
 
+        FaceData<double> E_face_kap = buildEFaceFromState(lambda_pf_s, kappa_pf_s);
+
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(
             geometry, prob.F, prob.MrInv, lambda_pf_s,
-            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+            E_face_kap, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(
             geometry, targetV, Vr, prob.MrInv,
             lambda_pf_s, kappa_pf_s,
             adjointFunc_OptKap, penalty_to_kapp, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_kap, wL_kap, wP_kap,
-            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+            E_face_kap, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
@@ -191,16 +223,18 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
         logStageStart(prob.patch_id, "OptLam", k, wP_kap, wP_lam);
 
+        FaceData<double> E_face_lam = buildEFaceFromState(lambda_pf_s, kappa_pf_s);
+
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(
             geometry, prob.F, prob.MrInv, kappa_pf_s,
-            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+            E_face_lam, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(
             geometry, targetV, Vr, prob.MrInv,
             lambda_pf_s, kappa_pf_s,
             adjointFunc_OptLam, penalty_to_lamb, prob.fixedIdx,
             prob.max_iter, prob.epsilon, wM_lam, wL_lam, wP_lam,
-            E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+            E_face_lam, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
         distance    = (Vr - targetV).squaredNorm() / nV;
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
@@ -211,18 +245,21 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
         {
             FaceData<double> kappa_pf_proj(mesh);
             FaceData<double> lambda_pf_proj(mesh);
+            FaceData<double> E_face_proj(mesh);
 
             for (Face f : mesh.faces()) {
                 double kap = kappa_pf_s[f];
                 double lam = lambda_pf_s[f];
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                           kap, lam, ac.thickness, prob.w_s, prob.w_b);
                 kappa_pf_proj[f]  = ac.feasible_kapp[idx];
                 lambda_pf_proj[f] = ac.feasible_lamb[idx];
+                E_face_proj[f]    = ac.feasible_modl[idx] / E_ref;
             }
 
             auto simFunc_proj = simulationFunction(
                 geometry, prob.MrInv, lambda_pf_proj, kappa_pf_proj,
-                E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+                E_face_proj, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
             // Start from flat state to match physical initial condition.
             Eigen::MatrixXd Vr_proj = makeFlatFromParam(prob.P);
@@ -267,6 +304,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
 
     FaceData<double> kappa_pf_final(mesh);
     FaceData<double> lambda_pf_final(mesh);
+    FaceData<double> E_face_final(mesh);
 
     for (Face f : mesh.faces()) {
         const int fid = static_cast<int>(f.getIndex());
@@ -274,9 +312,11 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
         const double kap_f = kappa_pf_s[f];
         const double lam_f = lambda_pf_s[f];
 
-        int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap_f, lam_f);
+        int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                   kap_f, lam_f, ac.thickness, prob.w_s, prob.w_b);
         kappa_pf_final[f]  = ac.feasible_kapp[idx];
         lambda_pf_final[f] = ac.feasible_lamb[idx];
+        E_face_final[f]    = ac.feasible_modl[idx] / E_ref;
         result.t1[fid]     = ac.feasible_t_vals[idx].first;
         result.t2[fid]     = ac.feasible_t_vals[idx].second;
 
@@ -291,7 +331,7 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     // =====================================================================
     auto simFunc_final = simulationFunction(
         geometry, prob.MrInv, lambda_pf_final, kappa_pf_final,
-        E, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
+        E_face_final, nu, ac.thickness, prob.w_s, prob.w_b, ref_faces);
 
     result.V_proj = makeFlatFromParam(prob.P);
     newton(geometry, result.V_proj, simFunc_final,
@@ -308,11 +348,15 @@ InverseDesignResult runInverseDesign(const InverseDesignProblem& prob)
     result.dist_inv  = (result.V_inv  - targetV).squaredNorm() / nV;
     result.dist_proj = (result.V_proj - targetV).squaredNorm() / nV;
 
-    if (prob.patch_id >= 0)
-        spdlog::info("Patch {}: Final projected distance (aligned): {:.6f}",
+    if (prob.patch_id >= 0) {
+        spdlog::info("Patch {}: Final inverse distance: {:.6f}", prob.patch_id, result.dist_inv);
+        spdlog::info("\033[1;33m>>> Patch {}: Final projected distance (aligned): {:.6f} <<<\033[0m",
                      prob.patch_id, result.dist_proj);
-    else
-        spdlog::info("Final projected distance (aligned): {:.6f}", result.dist_proj);
+    } else {
+        spdlog::info("Final inverse distance: {:.6f}", result.dist_inv);
+        spdlog::info("\033[1;33m>>> Final projected distance (aligned): {:.6f} <<<\033[0m",
+                     result.dist_proj);
+    }
 
     return result;
 }

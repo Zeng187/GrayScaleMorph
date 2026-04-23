@@ -142,22 +142,27 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              const FaceData<Eigen::Matrix2d> &MrInv,
                                                              const FaceData<double> &lambda,
                                                              const FaceData<double> &kappa,
-                                                             double E, double nu, double h,
+                                                             const FaceData<double> &E_face,
+                                                             double nu, double h,
                                                              double w_s, double w_b,
                                                              const std::vector<int> &ref_faces)
 {
 
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  // Factor the Lamé-like coefficients into global (geometric) and per-face
+  // (material) parts so the element loop does one mul per face instead of
+  // recomputing alpha/beta from scratch:
+  //   alpha_f = E_f * c_alpha,  beta_f = E_f * c_beta
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<3, double, Vertex> func = TinyAD::scalar_function<3>(mesh.vertices());
 
   // 1st fundamental form
   func.add_elements<3>(mesh.faces(),
-                       [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+                       [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
                          // Evaluate element using either double or TinyAD::Double
                          using T = TINYAD_SCALAR_TYPE(element);
@@ -177,18 +182,22 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
 
                          T lam = T(lambda[f]);
 
+                         const double E_f = E_face[f];
+                         const double alpha_f = E_f * c_alpha;
+                         const double beta_f = E_f * c_beta;
+
                          T lam_sqr = lam * lam;
                          Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
-                         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
                          Ws = Ws * (1.0 / lam_sqr);
 
                          return T(w_s) * Ws * dA;
                        });
 
   func.add_elements<12>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      mesh.faces(), [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
 
@@ -203,6 +212,10 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         T lam = T(lambda[f]);
         T kap = T(kappa[f]);
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
@@ -214,7 +227,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -226,22 +239,23 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              const FaceData<Eigen::Matrix2d> &MrInv,
                                                              const FaceData<double> &lambda,
                                                              const VertexData<double> &kappa,
-                                                             double E, double nu, double h,
+                                                             const FaceData<double> &E_face,
+                                                             double nu, double h,
                                                              double w_s, double w_b,
                                                              const std::vector<int> &ref_faces)
 {
 
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<3, double, Vertex> func = TinyAD::scalar_function<3>(mesh.vertices());
 
   // 1st fundamental form
   func.add_elements<3>(mesh.faces(),
-                       [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+                       [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
                          // Evaluate element using either double or TinyAD::Double
                          using T = TINYAD_SCALAR_TYPE(element);
@@ -261,18 +275,22 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
 
                          T lam = T(lambda[f]);
 
+                         const double E_f = E_face[f];
+                         const double alpha_f = E_f * c_alpha;
+                         const double beta_f = E_f * c_beta;
+
                          T lam_sqr = lam * lam;
                          Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
-                         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
                          Ws = Ws * (1.0 / lam_sqr);
 
                          return T(w_s) * Ws * dA;
                        });
 
   func.add_elements<12>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      mesh.faces(), [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
 
@@ -289,6 +307,10 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         for(Vertex v: f.adjacentVertices())
           kap += kappa[v] / 3;
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> Ff = M * (MrInv[f]);
 
@@ -300,7 +322,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -312,7 +334,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
                                                              const FaceData<Eigen::Matrix2d> &MrInv,
                                                              const VertexData<double> &lambda,
                                                              const VertexData<double> &kappa,
-                                                             double E,
+                                                             const FaceData<double> &E_face,
                                                              double nu,
                                                              double h,
                                                              double w_s,
@@ -322,15 +344,15 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
 
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<3, double, Vertex> func = TinyAD::scalar_function<3>(mesh.vertices());
 
   // 1st fundamental form
   func.add_elements<3>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      mesh.faces(), [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
@@ -352,17 +374,21 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         for(Vertex v: f.adjacentVertices())
           lam += lambda[v] / 3;
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         T lam_sqr = lam * lam;
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) ;
+        T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) ;
         Ws = Ws * (1.0 / lam_sqr);
 
         return T(w_s) * Ws * dA; });
 
   func.add_elements<12>(
-      mesh.faces(), [&, alpha, beta, E, nu, h, w_s, w_b, lambda, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      mesh.faces(), [&, c_alpha, c_beta, h, w_s, w_b, lambda, kappa, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
 
@@ -381,6 +407,10 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         for(Vertex v: f.adjacentVertices())
           kap += kappa[v] / 3;
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         // Compute deformation gradient
         Eigen::Matrix<T, 3, 2> F = M * (MrInv[f]);
 
@@ -392,7 +422,7 @@ TinyAD::ScalarFunction<3, double, Vertex> simulationFunction(IntrinsicGeometryIn
         Eigen::Matrix2<T> eps_b = (F.transpose() * L * F) - b_bar;
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * (1.0 / lam_sqr);
 
         return T(w_b) * Wb * dA; });
@@ -625,7 +655,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                                                                               const Eigen::MatrixXi &F,
                                                                               const FaceData<Eigen::Matrix2d> &MrInv,
                                                                               const VertexData<double> &lambda,
-                                                                              double E,
+                                                                              const FaceData<double> &E_face,
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
@@ -634,8 +664,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 {
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
@@ -643,7 +673,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
   // 1st fundamental form
   func.add_elements<9>(TinyAD::range(F.rows()),
-                       [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+                       [&, c_alpha, c_beta, h, w_s, w_b, lambda, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
                          using T = TINYAD_SCALAR_TYPE(element);
                          Eigen::Index f_idx = element.handle;
@@ -666,11 +696,15 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                          lam = (lambda[F(f_idx, 0)] + lambda[F(f_idx, 1)] + lambda[F(f_idx, 2)]) / 3.0;
                          T lam_sqr = lam * lam;
 
+                         const double E_f = E_face[mesh.face(f_idx)];
+                         const double alpha_f = E_f * c_alpha;
+                         const double beta_f = E_f * c_beta;
+
                          Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
                          T trM = Egreen.trace();
                          T trM2 = (Egreen * Egreen).trace();
-                         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
                          Ws = Ws * 1.0 / lam_sqr;
                          return T(w_s) * Ws * dA;
                        });
@@ -680,7 +714,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
   func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, lambda, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, lambda, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -713,13 +747,18 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
         for (Vertex v : f.adjacentVertices())
           lam += lambda[v] / 3;
         T lam_sqr = lam * lam;
+
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -731,7 +770,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                                                                               const Eigen::MatrixXi &F,
                                                                               const FaceData<Eigen::Matrix2d> &MrInv,
                                                                               const FaceData<double> &lambda,
-                                                                              double E,
+                                                                              const FaceData<double> &E_face,
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
@@ -740,8 +779,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 {
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Variables: [x (3|V|), kappa_pf (|F|)]
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
@@ -749,7 +788,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
   // 1st fundamental form (stretching) — lambda fixed per-face, no kappa variable
   func.add_elements<9>(TinyAD::range(F.rows()),
-                       [&, alpha, beta, E, nu, h, w_s, w_b, lambda](auto &element) -> TINYAD_SCALAR_TYPE(element)
+                       [&, c_alpha, c_beta, h, w_s, w_b, lambda, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
                        {
                          using T = TINYAD_SCALAR_TYPE(element);
                          Eigen::Index f_idx = element.handle;
@@ -770,11 +809,15 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
                          T lam = T(lambda[f_idx]);
                          T lam_sqr = lam * lam;
 
+                         const double E_f = E_face[mesh.face(f_idx)];
+                         const double alpha_f = E_f * c_alpha;
+                         const double beta_f = E_f * c_beta;
+
                          Eigen::Matrix<T, 2, 2> eps_s = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
                          T trM = eps_s.trace();
                          T trM2 = (eps_s * eps_s).trace();
-                         T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+                         T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
                          Ws = Ws * T(1.0) / lam_sqr;
                          return T(w_s) * Ws * dA;
                        });
@@ -784,7 +827,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
   func.add_elements<3 * 12 + 1>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, lambda, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, lambda, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -811,13 +854,18 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
         T lam = T(lambda[f]);
         T lam_sqr = lam * lam;
+
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
 
         T trM = eps_b.trace();
         T trM2 = (eps_b * eps_b).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -829,7 +877,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
                                                                               const Eigen::MatrixXi &F,
                                                                               const FaceData<Eigen::Matrix2d> &MrInv,
                                                                               const VertexData<double> &kappa,
-                                                                              double E,
+                                                                              const FaceData<double> &E_face,
                                                                               double nu,
                                                                               double h,
                                                                               double w_s,
@@ -838,8 +886,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
 {
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Set up function with 3D vertex positions as variables.
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
@@ -848,7 +896,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
   // 1st fundamental form
   func.add_elements<6 + 6>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         // Evaluate element using either double or TinyAD::Double
         using T = TINYAD_SCALAR_TYPE(element);
@@ -879,11 +927,15 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
         T lam = (lambda_f(0) + lambda_f(1) + lambda_f(2)) / 3;
         T lam_sqr = lam * lam;
 
+        const double E_f = E_face[mesh.face(f_idx)];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+        T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
         Ws = Ws * 1.0 / lam_sqr;
         return T(w_s) * Ws * dA;
       });
@@ -893,7 +945,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
 
   func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, kappa, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -925,13 +977,17 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixKap_OptLam(In
         for (Vertex v : f.adjacentVertices())
           kap += kappa[v] / 3;
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * 1.0 / lam_sqr;
         return T(w_b) * Wb * dA;
       });
@@ -944,7 +1000,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
                                const Eigen::MatrixXi &F,
                                const FaceData<Eigen::Matrix2d> &MrInv,
                                const FaceData<double> &kappa, // FixKap: per-face
-                               double E,
+                               const FaceData<double> &E_face,
                                double nu,
                                double h,
                                double w_s,
@@ -953,8 +1009,8 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
 {
   SurfaceMesh &mesh = geometry.mesh;
 
-  const double alpha = E * nu / (1 - nu * nu);
-  const double beta = E / (2 * (1 + nu));
+  const double c_alpha = nu / (1.0 - nu * nu);
+  const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
   // Variables: [x (3|V|), lambda (|F|)]
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
@@ -963,7 +1019,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
   // 1st fundamental form (stretching)
   func.add_elements<6 + 6>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, E_face](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -985,12 +1041,16 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
         T lam_sqr = lam * lam;
 
+        const double E_f = E_face[mesh.face(f_idx)];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix<T, 2, 2> Egreen = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
 
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
 
-        T Ws = (T(0.5 * alpha) * trM * trM + T(beta) * trM2);
+        T Ws = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2);
         Ws = Ws * T(1.0) / lam_sqr;
 
         return T(w_s) * Ws * dA;
@@ -1001,7 +1061,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
 
   func.add_elements<3 * 12 + 3>(
       TinyAD::range(F.rows()),
-      [&, alpha, beta, E, nu, h, w_s, w_b, kappa, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&, c_alpha, c_beta, h, w_s, w_b, kappa, E_face, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -1030,6 +1090,10 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         // kap from per-face fixed value
         T kap = T(kappa[f]);
 
+        const double E_f = E_face[f];
+        const double alpha_f = E_f * c_alpha;
+        const double beta_f = E_f * c_beta;
+
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
 
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;
@@ -1037,7 +1101,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         T trM = Egreen.trace();
         T trM2 = (Egreen * Egreen).trace();
 
-        T Wb = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0);
+        T Wb = (T(0.5 * alpha_f) * trM * trM + T(beta_f) * trM2) * h * h * T(1.0 / 3.0);
         Wb = Wb * T(1.0) / lam_sqr;
 
         return T(w_b) * Wb * dA;

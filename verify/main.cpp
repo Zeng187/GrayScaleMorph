@@ -110,7 +110,9 @@ int main(int argc, char* argv[])
         FaceData<double> lambda_pf(mesh, 1.0);
 
         // -- Sweep kappa and evaluate total energy ----------------------------
-        constexpr double E_mod = 1.0;
+        // Verify is a single-material sweep; use uniform E_face = 1.0 to match
+        // the legacy scalar-E=1 regime this tool was calibrated against.
+        FaceData<double> E_face(mesh, 1.0);
         constexpr double nu    = 0.5;
         constexpr double h     = 1.0;
         constexpr double w_s   = 1.0;
@@ -130,7 +132,7 @@ int main(int argc, char* argv[])
 
             auto simFunc = simulationFunction(
                 geometry, MrInv, lambda_pf, kappa_pf,
-                E_mod, nu, h, w_s, w_b, ref_faces);
+                E_face, nu, h, w_s, w_b, ref_faces);
 
             // Evaluate energy at the 3D shape (no solve)
             auto x_from = simFunc.x_from_data(
@@ -141,7 +143,7 @@ int main(int argc, char* argv[])
             FaceData<double> kappa_zero(mesh, 0.0);
             auto simFunc_s = simulationFunction(
                 geometry, MrInv, lambda_pf, kappa_zero,
-                E_mod, nu, h, w_s, 0.0, ref_faces);  // w_b=0
+                E_face, nu, h, w_s, 0.0, ref_faces);  // w_b=0
             double e_stretch = simFunc_s.eval(x_from);
             double e_bend = energy - e_stretch;
 

@@ -51,8 +51,10 @@
 
 namespace {
 
-/// Dimensionless reference stiffness (matches inverse_design.cpp).
-constexpr double kE  = 1.0;
+/// Dimensionless reference Poisson ratio (matches inverse_design.cpp).
+/// Young's modulus is now per-face (see E_face below); it is normalised by
+/// ActiveComposite's mean feasible modulus so the energy magnitude stays in
+/// the same regime as the legacy scalar-E=1 code path.
 constexpr double kNu = 0.5;
 
 /// Default energy weights for forward simulation.
@@ -70,6 +72,7 @@ struct CliOptions
     std::string materialPath;
     std::string curvesPath;
     std::string outputPath;
+    std::string condPath;
 };
 
 /// Fully resolved paths + solver parameters for the simulation.
@@ -93,7 +96,7 @@ std::string usageString(const char* prog)
 {
     return "Usage:\n"
            "  " + std::string(prog) +
-           " --param <p.obj> --material <m.txt> --curves <c.json> --output <o.obj>\n"
+           " --param <p.obj> --material <m.txt> --curves <c.json> --output <o.obj> [--cond <cond.txt>]\n"
            "  " + std::string(prog) + " --cfg <cfg.json> [--output <o.obj>]";
 }
 
@@ -138,6 +141,7 @@ CliOptions parseCli(int argc, char* argv[])
         else if (arg == "--material") opts.materialPath  = next("--material");
         else if (arg == "--curves")   opts.curvesPath    = next("--curves");
         else if (arg == "--output")   opts.outputPath    = next("--output");
+        else if (arg == "--cond")     opts.condPath      = next("--cond");
         else
             throw std::runtime_error("Unknown argument: " + arg + "\n"
                                      + usageString(argv[0]));
@@ -246,6 +250,7 @@ ForwardInputs resolveInputs(const CliOptions& opts)
         inputs.materialPath = opts.materialPath;
         inputs.curvesPath   = opts.curvesPath;
         inputs.outputPath   = opts.outputPath;
+        inputs.condPath     = opts.condPath;
     }
 
     return inputs;
@@ -379,11 +384,15 @@ int main(int argc, char* argv[])
         // -- Load material curves -----------------------------------------
         ActiveComposite ac(inputs.curvesPath);
         ac.ComputeMaterialCurve();
+        // Needed so referenceModulus() below sees a populated feasible set
+        // and E_face normalisation uses the real material spectrum.
+        ac.ComputeFeasibleVals();
         if (ac.thickness <= 0.0)
             throw std::runtime_error(
                 "Material thickness must be positive (got "
                 + std::to_string(ac.thickness) + ").");
-        spdlog::info("Material curves loaded (thickness = {}).", ac.thickness);
+        spdlog::info("Material curves loaded (thickness = {}, feasible set = {} entries).",
+                     ac.thickness, ac.feasible_modl.size());
 
         // -- Load boundary condition (fixed vertex indices) ---------------
         std::vector<int> fixedVertices;  // vertex indices to fix
@@ -527,22 +536,26 @@ int main(int argc, char* argv[])
                 "Forward requires at least one fixed vertex to remove rigid-body modes.");
         spdlog::info("Forward solve keeps {} constrained DOFs.", fixedIdx.size());
 
-        // -- Convert (t1, t2) -> per-face (lambda, kappa) -----------------
+        // -- Convert (t1, t2) -> per-face (lambda, kappa, E) --------------
+        const double E_ref = referenceModulus(ac);
+        spdlog::info("Reference modulus E_ref = {:.4f} (mean of feasible set); "
+                     "per-face E normalised by this value.", E_ref);
+
         FaceData<double> lambda_pf(mesh);
         FaceData<double> kappa_pf(mesh);
+        FaceData<double> E_face(mesh);
         for (Face f : mesh.faces()) {
             const int fi = static_cast<int>(f.getIndex());
             lambda_pf[f] = compute_lamb_d(ac.m_strain_curve, t1[fi], t2[fi]);
             kappa_pf[f]  = compute_curv_d(ac.m_strain_curve, ac.thickness,
                                           t1[fi], t2[fi]);
-            // printf("Face %d: t1=%.3f, t2=%.3f -> lambda=%.3e, kappa=%.3e\n",
-            //        fi, t1[fi], t2[fi], lambda_pf[f], kappa_pf[f]);
+            E_face[f]    = compute_modu_d(ac.m_moduls_curve, t1[fi], t2[fi]) / E_ref;
         }
 
         // -- Build simulation energy function -----------------------------
         auto simFunc = simulationFunction(
             geometry, MrInv, lambda_pf, kappa_pf,
-            kE, kNu, ac.thickness, kWs, kWb, ref_faces);
+            E_face, kNu, ac.thickness, kWs, kWb, ref_faces);
 
         // -- Forward solve from flat initial state ------------------------
         Eigen::MatrixXd Vr = V_flat;
@@ -594,12 +607,14 @@ int main(int argc, char* argv[])
             Eigen::VectorXd lam_diff = lam_pf_r - lam_pf_t;
             Eigen::VectorXd kap_diff = kap_pf_r - kap_pf_t;
 
-            // Energy densities (use original geometry + MrInv, deformed Vr)
+            // Energy densities (use original geometry + MrInv, deformed Vr).
+            // E_face is threaded into the diagnostic so VTK hot-spots reflect
+            // the same per-face modulus weighting as the main solve.
             Eigen::VectorXd Ws_density = Eigen::VectorXd::Zero(nFr);
             Eigen::VectorXd Wb_density = Eigen::VectorXd::Zero(nFr);
-            Morphmesh morph_diag(Vr, P, F, kE, kNu);
+            Morphmesh morph_diag(Vr, P, F, 1.0, kNu);
             morph_diag.ComputeElasticEnergy(geometry, MrInv,
-                lambda_pf, kappa_pf, ac.thickness,
+                lambda_pf, kappa_pf, E_face, ac.thickness,
                 Vr, F, Ws_density, Wb_density);
 
             // Write single VTK with all per-face diagnostics

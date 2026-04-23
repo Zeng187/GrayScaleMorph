@@ -14,7 +14,7 @@
 | 可执行文件 | 源文件 | 功能 | CLI |
 |-----------|--------|------|-----|
 | **Parameterize** | `parameterize/main.cpp` | 3D 网格 → 2D 参数化 + 目标形状 | `./Parameterize [--cfg cfg.json]` |
-| **Inverse** | `inverse/main.cpp` | 单 patch 逆设计（调试用） | `./Inverse`（读 `inverse_cfg.json`，需 `patch.id ≥ 0`） |
+| **Inverse** | `inverse/main.cpp` | 单 patch 逆设计（调试用） | `./Inverse`（读 `inverse_cfg.json`；分割模式需 `patch.id ≥ 0`，非分割模式自动默认 0） |
 | **InverseWhole** | `inverse_whole/main.cpp` | 全 patch 逆设计 | `./InverseWhole`（读 `inverse_whole_cfg.json`） |
 | **Forward** | `forward/main.cpp` | 参数化网格 + 材料 → Newton 正向求解 → 平衡形状 | `./Forward --cfg cfg.json` 或显式文件模式 |
 | **Evaluate** | `eval/main.cpp` | 可行性评估或逆设计误差 | `./Evaluate --cfg cfg.json --feas` 或 `--inverse` |
@@ -23,7 +23,9 @@
 
 ### Inverse / InverseWhole（三阶段 Pipeline）
 
-直接读取 `segmentDir()/patches/patch_*.obj`，不依赖 `seg_id.txt`。
+**输入模式**（由 `segment.enabled` 控制）：
+- `segment.enabled: true`（默认）：读取 `segmentDir()/patches/patch_*.obj`，不依赖 `seg_id.txt`
+- `segment.enabled: false`：直接读取 `model.mesh_path` 作为唯一 patch（整体逆设计，无需分割）；此时 `modelDir()` 仅为 `model.name`，忽略 `segment.method`/`segment.plan`
 
 **Phase 1**：读所有 patches → linearSubdivide（按需）→ parameterizeMesh（仅 gauge shift P，V 不变）
 **Phase 2**：PCA 旋转每个 P（最长轴 → x 轴）→ `scale_i = platewidth / P_extent_i` → `globalScale = min(scale_i)`
@@ -74,11 +76,12 @@
 
 | 方向 | 文件 | 路径 |
 |------|------|------|
-| **输入** | patch 网格 | `Resources/segment/{modelDir}/patches/patch_{pid}.obj` |
+| **输入** | patch 网格 | `segment.enabled=true`: `Resources/segment/{modelDir}/patches/patch_{pid}.obj`；`false`: `model.mesh_path` |
 | **输入** | 材料曲线 | `Resources/materials/poly-curves.json` |
 | **输出** | 2D 参数化 | `Resources/param/{modelDir}/patch_{pid}_param.obj` |
 | **输出** | 3D 目标（globalScale） | `Resources/morph/{modelDir}/patch_{pid}_target.obj` |
-| **输出** | forward 验证形状（rigid-aligned） | `Resources/morph/{modelDir}/patch_{pid}_proj.obj` |
+| **输出** | 连续最优形状（投影前） | `Resources/morph/{modelDir}/patch_{pid}_inv.obj` |
+| **输出** | forward 验证形状（投影后 rigid-aligned） | `Resources/morph/{modelDir}/patch_{pid}_proj.obj` |
 | **输出** | per-face λ/κ excess | `Resources/morph/{modelDir}/patch_{pid}_metrics.txt` |
 | **输出** | per-face 材料 (t1, t2) | `Resources/design/{modelDir}/patch_{pid}_material.txt` |
 | **输出** | 固定顶点索引 | `Resources/cond/{modelDir}/patch_{pid}_bound_center.txt` |
@@ -158,11 +161,12 @@
 | Section | Key | 类型 | 说明 |
 |---------|-----|------|------|
 | `model` | `name` | string | 模型名称 |
-| `model` | `mesh_path` | string | 目标网格 OBJ 路径（Parameterize/Evaluate 使用；Inverse/InverseWhole 直接读 patches，但 Config 仍要求此字段存在） |
+| `model` | `mesh_path` | string | 目标网格 OBJ 路径（Parameterize/Evaluate 使用；`segment.enabled=false` 时 Inverse/InverseWhole 也直接读此文件） |
 | `material` | `curves_path` | string | 材料多项式曲线 JSON 路径 |
-| `segment` | `path` | string | 分割输出根目录 |
-| `segment` | `method` | string | EvolutionCut 方法标签（空则不拼接） |
-| `segment` | `plan` | string | EvolutionCut 方案标签（空则不拼接） |
+| `segment` | `enabled` | bool | `true`（默认）= 读分割 patches；`false` = 用 `mesh_path` 作单 patch |
+| `segment` | `path` | string | 分割输出根目录（`enabled=true` 时必填，`false` 时可空） |
+| `segment` | `method` | string | EvolutionCut 方法标签（空则不拼接；`enabled=false` 时忽略） |
+| `segment` | `plan` | string | EvolutionCut 方案标签（空则不拼接；`enabled=false` 时忽略） |
 | `paths` | `param_path` | string | 参数化结果基础目录 |
 | `paths` | `morph_path` | string | 逆设计产物基础目录 |
 | `paths` | `design_path` | string | 材料分配基础目录 |
@@ -281,8 +285,18 @@ strain(t) = poly_strain(t)
 modulus(t) = poly_modulus(t)
 lambda(t1,t2) = 1 + 0.5 * (strain(t1) + strain(t2))
 kappa(t1,t2) = 1.5 * (strain(t1) - strain(t2)) / thickness
+E(t1,t2)     = 0.5 * (modulus(t1) + modulus(t2))
 ```
-**注意**：当前主优化在连续 (lambda, kappa) 空间进行，优化结束后再投影到最近的离散可制造 (t1, t2)。模量 Eeff 已读入但未参与主能量计算（即当前只用"剂量影响本征应变"，未用"剂量影响弹性模量"）。
+主优化在连续 (lambda, kappa) 空间进行，优化结束后投影到最近的离散可制造 (t1, t2)。
+
+**模量已接入主能量装配**：
+- `simulationFunction` / `adjointFunction_*` / 4 个 SGN 变体（newton.{h,cpp}）的签名从标量 `double E` 改为 `const FaceData<double>& E_face`
+- 每个 element 内 `alpha_f = E_f * c_alpha`, `beta_f = E_f * c_beta`（其中 `c_alpha = nu/(1-nu²)`, `c_beta = 1/(2(1+nu))` 是全局标量预计算）
+- `E_face[f] = compute_modu_d(moduls_curve, t1, t2) / E_ref`，其中 `E_ref = referenceModulus(ac)` = mean(feasible_modl)，使中位数材料的 E_face ≈ 1（保留旧 E=1 数值区间）
+- Inverse 采用 **lagged-E** 方案：每 stage 开始前用当前 (lambda, kappa) 投到最近 feasible 取 idx，从 `ac.feasible_modl[idx]` 读 E，stage 内冻结传给 adjoint + Newton；下一 stage 重算
+- Morphmesh `ComputeElasticEnergy` 也接 `E_face`，VTK 诊断热点与主求解一致
+
+**死代码**：`simulationFunctionWithMaterial` / `adjointFunctionWithMaterial_Lay1/2` / `sparse_gauss_newton_lay1/2` 仍是旧标量 E，但无活跃调用者，待后续删除。
 
 ## 逆设计 Pipeline
 
@@ -330,6 +344,39 @@ adjoint / implicit differentiation（非有限差分）：
 | 设计变量 | 统一 vertex-based | lambda per-face + kappa per-face 交替优化 |
 | 正则 | 通用 | lambda 使用 face-based 正则图 |
 | 目标 | 纯参数场 | 形状误差 + 可制造 penalty + 场正则 |
+
+## 材料投影策略
+
+### 问题背景
+
+逆设计在连续 (λ, κ) 空间优化后，需投影到离散可制造 (t1, t2) 材料对。投影质量直接影响 forward 验证形状（dist_proj）。
+
+### 当前实现：Kappa 优先加权投影
+
+`find_feasible_idx()`（`material.hpp`）使用**反能量比加权距离**：
+
+```
+W_kap = 3 · w_s / (w_b · h²)
+d = Δλ² + W_kap · Δκ²
+```
+
+**原理**：壳能量中拉伸 ∝ w_s 主导、弯曲 ∝ w_b·h²/3 较弱，但对 shape fidelity 而言曲率（kappa）比度量（lambda）更重要。反转能量比使投影优先保留 kappa 精度。
+
+### 关键发现（hemisphere 非分割实验）
+
+| 投影策略 | dist_proj | κ=0 面比例 | 结论 |
+|---------|-----------|-----------|------|
+| L2（等权） | 5.229 | 86% | lambda 主导距离，kappa 被牺牲 |
+| 能量加权（stretching 主导） | 5.203 | 93% | 更偏 lambda → 更多零曲率面 |
+| Kappa 优先（W=3） | 5.235 | 78% | kappa 改善但 dist_proj 无显著变化 |
+
+**根本瓶颈**：双层材料可行集中**高 λ 与非零 κ 不可兼得**（λ>1.08 的可行点全部 κ=0），且 lambda 是尺度不变量——platewidth 缩放不改变 lambda 可行性问题。
+
+**结论**：对 hemisphere 等高曲率完整曲面，单片逆设计受材料 lambda 可行域限制，任何投影策略均无法突破。分割后 per-patch lambda 展幅缩小是唯一解。
+
+### Penalty 函数的同类问题
+
+`JointMaterialPenaltyPerF_OptKap/OptLam`（`functions.cpp`）使用同样的无权 L2 联合距离。当 lambda 远超可行域时，soft-min（β=50）所有可行点的 exp 项趋零，**penalty 对 kappa 的梯度消失**——无法引导 kappa 向正确可行点收敛。此问题已识别但尚未修复。
 
 ## Bug 修复历史
 详见 `PLAN.md`，记录了 10 个关键问题的诊断与修复（fixedIdx 为空、能量不一致、adjoint 错误等），所有 P0 bug 已修复。

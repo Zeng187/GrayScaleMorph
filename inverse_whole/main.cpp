@@ -132,19 +132,30 @@ int main(int argc, char* argv[])
     std::filesystem::create_directories(condDir);
     std::filesystem::create_directories(config.paramDir());
 
-    // --- Discover patches ---
-    std::string patchesDir = config.segmentDir() + "patches/";
-    if (!std::filesystem::is_directory(patchesDir)) {
-        spdlog::error("Patches directory not found: {}", patchesDir);
-        return -1;
+    // --- Discover patch inputs ---
+    std::vector<std::string> patchFiles;
+    if (config.segment.enabled) {
+        std::string patchesDir = config.segmentDir() + "patches/";
+        if (!std::filesystem::is_directory(patchesDir)) {
+            spdlog::error("Patches directory not found: {}", patchesDir);
+            return -1;
+        }
+        patchFiles = discoverPatches(patchesDir);
+        if (patchFiles.empty()) {
+            spdlog::error("No patch_*.obj files found in: {}", patchesDir);
+            return -1;
+        }
+        spdlog::info("Found {} patches in: {}", patchFiles.size(), patchesDir);
+    } else {
+        if (model.mesh_path.empty()) {
+            spdlog::error("segment.enabled=false but model.mesh_path is empty.");
+            return -1;
+        }
+        patchFiles.push_back(model.mesh_path);
+        spdlog::info("Segmentation disabled — treating model mesh as single patch: {}",
+                     model.mesh_path);
     }
-    std::vector<std::string> patchFiles = discoverPatches(patchesDir);
     int numPatches = static_cast<int>(patchFiles.size());
-    if (numPatches == 0) {
-        spdlog::error("No patch_*.obj files found in: {}", patchesDir);
-        return -1;
-    }
-    spdlog::info("Found {} patches in: {}", numPatches, patchesDir);
 
     // =====================================================================
     // Phase 1: Load patches → parameterize (gauge shift only, no V scaling)
@@ -258,9 +269,11 @@ int main(int argc, char* argv[])
 
         InverseDesignResult result = runInverseDesign(problem);
 
-        // Write target (at globalScale) and proj (rigid-aligned to target)
+        // Write target, inv (continuous optimum), and proj (after material projection)
         igl::writeOBJ(morphDir + "patch_" + std::to_string(pid) + "_target.obj",
                       V_scaled, F_patch);
+        igl::writeOBJ(morphDir + "patch_" + std::to_string(pid) + "_inv.obj",
+                      result.V_inv, F_patch);
         igl::writeOBJ(morphDir + "patch_" + std::to_string(pid) + "_proj.obj",
                       result.V_proj, F_patch);
 

@@ -72,10 +72,14 @@ public:
 
 
 
+    // Per-face E_face replaces the old member scalar E in the diagnostic
+    // energy density output, so VTK hot-spots reflect the actual heterogeneous
+    // material distribution used by the main simulationFunction.
     void ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometryInterface& geometry,
         const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
         const geometrycentral::surface::FaceData<double>& lambda,
         const geometrycentral::surface::FaceData<double>& kappa,
+        const geometrycentral::surface::FaceData<double>& E_face,
         double h,
         const Eigen::MatrixXd& V,
         const Eigen::MatrixXi& F,
@@ -86,6 +90,7 @@ public:
         const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
         const geometrycentral::surface::FaceData<double>& lambda,
         const geometrycentral::surface::VertexData<double>& kappa,
+        const geometrycentral::surface::FaceData<double>& E_face,
         double h,
         const Eigen::MatrixXd& V,
         const Eigen::MatrixXi& F,

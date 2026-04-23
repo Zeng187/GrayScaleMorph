@@ -93,6 +93,7 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
     const geometrycentral::surface::FaceData<double>& lambda,
     const geometrycentral::surface::FaceData<double>& kappa,
+    const geometrycentral::surface::FaceData<double>& E_face,
     double h,
     const Eigen::MatrixXd& V,
     const Eigen::MatrixXi& F,
@@ -101,8 +102,8 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
 {
     SurfaceMesh& mesh = geometry.mesh;
 
-    const double alpha = E * nu / (1 - nu * nu);
-    const double beta = E / (2 * (1 + nu));
+    const double c_alpha = nu / (1.0 - nu * nu);
+    const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
     for (Face f : mesh.faces())
     {
@@ -113,6 +114,10 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
 
         double lam = lambda[f];
         double kap = kappa[f];
+
+        const double E_f = E_face[f];
+        const double alpha = E_f * c_alpha;
+        const double beta = E_f * c_beta;
 
         Eigen::Vector3d x0 = V.row(x0_idx);
         Eigen::Vector3d x1 = V.row(x1_idx);
@@ -171,6 +176,7 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
     const geometrycentral::surface::FaceData<double>& lambda,
     const geometrycentral::surface::VertexData<double>& kappa,
+    const geometrycentral::surface::FaceData<double>& E_face,
     double h,
     const Eigen::MatrixXd& V,
     const Eigen::MatrixXi& F,
@@ -179,8 +185,8 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
 {
     SurfaceMesh& mesh = geometry.mesh;
 
-    const double alpha = E * nu / (1 - nu * nu);
-    const double beta = E / (2 * (1 + nu));
+    const double c_alpha = nu / (1.0 - nu * nu);
+    const double c_beta = 1.0 / (2.0 * (1.0 + nu));
 
     for (Face f : mesh.faces())
     {
@@ -191,6 +197,10 @@ void Morphmesh::ComputeElasticEnergy(geometrycentral::surface::IntrinsicGeometry
 
         double lam = lambda[f];
         double kap = (kappa[x0_idx] + kappa[x1_idx] + kappa[x2_idx]) / 3.0;
+
+        const double E_f = E_face[f];
+        const double alpha = E_f * c_alpha;
+        const double beta = E_f * c_beta;
 
         Eigen::Vector3d x0 = V.row(x0_idx);
         Eigen::Vector3d x1 = V.row(x1_idx);

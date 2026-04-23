@@ -6,12 +6,16 @@
 
 #include <vector>
 
+// Per-face Young's modulus (E_face) replaces the old scalar `E`.
+// Callers are expected to supply E_face already normalized by a reference
+// modulus so that the numerical regime of w_s / w_b / epsilon stays stable
+// across materials with heterogeneous stiffness.
 TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
 simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                    const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                    const geometrycentral::surface::FaceData<double> &lambda,
                    const geometrycentral::surface::FaceData<double> &kappa,
-                   double E,
+                   const geometrycentral::surface::FaceData<double> &E_face,
                    double nu,
                    double h,
                    double w_s,
@@ -23,7 +27,7 @@ simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometr
                    const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                    const geometrycentral::surface::FaceData<double> &lambda,
                    const geometrycentral::surface::VertexData<double> &kappa,
-                   double E,
+                   const geometrycentral::surface::FaceData<double> &E_face,
                    double nu,
                    double h,
                    double w_s,
@@ -35,7 +39,7 @@ simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometr
                    const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                    const geometrycentral::surface::VertexData<double> &lambda,
                    const geometrycentral::surface::VertexData<double> &kappa,
-                   double E,
+                   const geometrycentral::surface::FaceData<double> &E_face,
                    double nu,
                    double h,
                    double w_s,
@@ -79,7 +83,7 @@ adjointFunction_FixLam_OptKap(geometrycentral::surface::IntrinsicGeometryInterfa
                               const Eigen::MatrixXi &F,
                               const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                               const geometrycentral::surface::FaceData<double> &lambda,
-                              double E,
+                              const geometrycentral::surface::FaceData<double> &E_face,
                               double nu,
                               double h,
                               double w_s,
@@ -91,7 +95,7 @@ adjointFunction_FixLam_OptKap(geometrycentral::surface::IntrinsicGeometryInterfa
                               const Eigen::MatrixXi &F,
                               const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                               const geometrycentral::surface::VertexData<double> &lambda,
-                              double E,
+                              const geometrycentral::surface::FaceData<double> &E_face,
                               double nu,
                               double h,
                               double w_s,
@@ -103,7 +107,7 @@ adjointFunction_FixKap_OptLam(geometrycentral::surface::IntrinsicGeometryInterfa
                               const Eigen::MatrixXi &F,
                               const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                               const geometrycentral::surface::VertexData<double> &kappa,
-                              double E,
+                              const geometrycentral::surface::FaceData<double> &E_face,
                               double nu,
                               double h,
                               double w_s,
@@ -115,7 +119,7 @@ adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterf
                                const Eigen::MatrixXi &F,
                                const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
                                const geometrycentral::surface::FaceData<double> &kappa,
-                               double E,
+                               const geometrycentral::surface::FaceData<double> &E_face,
                                double nu,
                                double h,
                                double w_s,
