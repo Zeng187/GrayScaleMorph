@@ -1,12 +1,13 @@
 {
   "model": {
-    "name": "cup",
-    "mesh_path": "../Resources/meshes/cup.obj"
+    "name": "beetle_simp",
+    "mesh_path": "../Resources/meshes/beetle_simp.obj"
   },
   "material": {
     "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
   },
   "segment": {
+    "enabled": true,
     "path": "../Resources/segment/",
     "method": "original",
     "plan": "planA"
@@ -18,11 +19,12 @@
     "cond_path": "../Resources/cond/"
   },
   "patch": {
-    "id": 1
+    "id": 0
   },
+  
   "solver": {
     "platewidth": 40.0,
-    "max_iter": 20,
+    "max_iter": 100,
     "nf_min": 200,
     "epsilon": 1e-6,
     "w_s": 1.0,
@@ -32,7 +34,7 @@
     "wM_lam": 0.0,
     "wL_lam": 0.1,
     "wP_kap": 0.01,
-    "wP_lam": 0.01,
+    "wP_lam": 0.00,
     "penalty_threshold": 0.01,
     "betaP": 50.0
   }

@@ -1,7 +1,7 @@
 {
   "model": {
-    "name": "cup",
-    "mesh_path": "../Resources/meshes/cup.obj"
+    "name": "beetle_simp",
+    "mesh_path": "../Resources/meshes/beetle_simp.obj"
   },
   "material": {
     "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
@@ -18,7 +18,7 @@
     "cond_path": "../Resources/cond/"
   },
   "solver": {
-    "platewidth": 40.0,
+    "platewidth": 80.0,
     "max_iter": 20,
     "nf_min": 200,
     "epsilon": 1e-6,
