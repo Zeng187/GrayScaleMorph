@@ -54,31 +54,25 @@ inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2
 	return T(1.5) * (val_2 - val_1) / T(thickness);
 }
 
-// Find the feasible index that minimizes kappa-priority weighted distance.
+// Find the index of the nearest feasible (kap, lam) pair using equal-weighted
+// L2 distance.
 //
-// Uses inverse energy ratio to counteract stretching dominance:
-//   W_kap = 3 * w_s / (w_b * h^2)
-//   d = (lam - lam_f)^2 + W_kap * (kap - kap_f)^2
-//
-// Rationale: in the shell energy, stretching (∝ w_s) dominates bending
-// (∝ w_b * h^2/3). For shape fidelity, curvature (kappa) matters more
-// than metric (lambda), so we invert the energy ratio to weight kappa
-// more heavily in the projection.
+// NOTE: signature keeps (h, w_s, w_b) so all callers remain unchanged, but
+// these arguments are currently unused. An earlier kappa-priority variant
+// (W_kap = 3 * w_s / (w_b * h^2)) was reverted because it caused the
+// projected distance to oscillate / increase across alternating stages in
+// both segmented (cup patch 1) and unsegmented (hemisphere) runs.
 inline int find_feasible_idx(const std::vector<double>& feas_kap,
                               const std::vector<double>& feas_lam,
                               double kap, double lam,
-                              double h, double w_s, double w_b)
+                              double /*h*/, double /*w_s*/, double /*w_b*/)
 {
-    const double W_kap = 3.0 * w_s / (w_b * h * h);
-
     int best_i = 0;
     double best_d = std::numeric_limits<double>::max();
     for (size_t i = 0; i < feas_kap.size(); ++i) {
-        double dl = lam - feas_lam[i];
-        double dk = kap - feas_kap[i];
-
-        double d = dl * dl + W_kap * dk * dk;
-
+        const double dl = lam - feas_lam[i];
+        const double dk = kap - feas_kap[i];
+        const double d = dl * dl + dk * dk;
         if (d < best_d) { best_d = d; best_i = static_cast<int>(i); }
     }
     return best_i;
