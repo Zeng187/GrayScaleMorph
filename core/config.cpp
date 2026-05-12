@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -152,10 +153,39 @@ Config::Config(const std::string& filePath)
         patch.id = jsonGetOr<int>(sec, "id", patch.id);
     }
 
+    // ── global setup (Resources/setup/global.json) ──────────────────
+    // Loaded BEFORE solver so that solver fields can default to setup values
+    // and only be overridden when cfg explicitly repeats the key.
+    {
+        LoadGlobalSetupOptions opts;
+        opts.cfg_path = std::filesystem::path(filePath);
+        if (!material.curves_path.empty())
+            opts.material_path = std::filesystem::path(material.curves_path);
+        setup = loadGlobalSetup(j, opts);
+
+        solver.platewidth    = setup.platewidth;
+        solver.poisson_ratio = setup.poisson_ratio;
+    }
+
     // ── solver ───────────────────────────────────────────────────────
     {
         const auto& sec = findSection(j, {"solver", "RuntimeSettings"});
-        solver.platewidth        = jsonGetOr(sec, "platewidth",        jsonGetOr(sec, "Platewidth", solver.platewidth));
+        // platewidth / poisson_ratio: cfg may override the setup default.
+        // We log a warning so any deviation from the global default stays visible.
+        if (sec.contains("platewidth") || sec.contains("Platewidth")) {
+            const double overridden =
+                jsonGetOr(sec, "platewidth", jsonGetOr(sec, "Platewidth", solver.platewidth));
+            spdlog::warn("cfg.solver.platewidth={} overrides setup.platewidth={}",
+                         overridden, setup.platewidth);
+            solver.platewidth = overridden;
+        }
+        if (sec.contains("poisson_ratio") || sec.contains("PoissonRatio")) {
+            const double overridden =
+                jsonGetOr(sec, "poisson_ratio", jsonGetOr(sec, "PoissonRatio", solver.poisson_ratio));
+            spdlog::warn("cfg.solver.poisson_ratio={} overrides setup.poisson_ratio={}",
+                         overridden, setup.poisson_ratio);
+            solver.poisson_ratio = overridden;
+        }
         solver.max_iter          = jsonGetOr(sec, "max_iter",          jsonGetOr(sec, "MaxIter",    solver.max_iter));
         solver.nf_min            = jsonGetOr(sec, "nf_min",            jsonGetOr(sec, "nFmin",      solver.nf_min));
         solver.epsilon           = jsonGetOr(sec, "epsilon",           solver.epsilon);
@@ -168,7 +198,12 @@ Config::Config(const std::string& filePath)
         solver.wP_kap            = jsonGetOr(sec, "wP_kap",           solver.wP_kap);
         solver.wP_lam            = jsonGetOr(sec, "wP_lam",           solver.wP_lam);
         solver.penalty_threshold = jsonGetOr(sec, "penalty_threshold", solver.penalty_threshold);
-        solver.betaP             = jsonGetOr(sec, "betaP",            solver.betaP);
+        // Accept the new `well_scale` key (energy-weighted Lorentzian sharpness)
+        // or the legacy `betaP` key for backward compatibility.
+        if (sec.contains("well_scale"))
+            solver.well_scale    = jsonGetOr(sec, "well_scale",       solver.well_scale);
+        else if (sec.contains("betaP"))
+            solver.well_scale    = jsonGetOr(sec, "betaP",            solver.well_scale);
     }
 
     spdlog::info("Config: model='{}', modelDir='{}', mesh='{}', segment.enabled={}, patch.id={}",

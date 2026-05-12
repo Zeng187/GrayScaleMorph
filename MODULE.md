@@ -2,7 +2,7 @@
 
 ## 概述
 
-材料-形状编程内核，提供 4 个可执行入口 + 1 个共享静态库（`grayscale_core`）。给定目标 3D 形状，通过灰度复合材料参数化、逆设计、正向验证、可行性评估等独立步骤完成从平板到目标形状的变形设计。
+材料-形状编程内核，提供 4 个可执行入口 + 1 个共享静态库（`grayscale_core`）。给定目标 3D 形状，通过灰度复合材料参数化、逆设计、正向验证等独立步骤完成从平板到目标形状的变形设计。
 
 **参考论文**：
 - **Shrink & Morph (TOG 2023)**：主要框架——非欧薄壳能量、参数化、逆设计目标函数
@@ -17,7 +17,6 @@
 | **Inverse** | `inverse/main.cpp` | 单 patch 逆设计（调试用） | `./Inverse`（读 `inverse_cfg.json`；分割模式需 `patch.id ≥ 0`，非分割模式自动默认 0） |
 | **InverseWhole** | `inverse_whole/main.cpp` | 全 patch 逆设计 | `./InverseWhole`（读 `inverse_whole_cfg.json`） |
 | **Forward** | `forward/main.cpp` | 参数化网格 + 材料 → Newton 正向求解 → 平衡形状 | `./Forward --cfg cfg.json` 或显式文件模式 |
-| **Evaluate** | `eval/main.cpp` | 可行性评估或逆设计误差 | `./Evaluate --cfg cfg.json --feas` 或 `--inverse` |
 
 > **兼容性说明**：CMake 仍生成 `GrayScaleMorph` 可执行文件作为 `Inverse` 的向后兼容别名。
 
@@ -51,15 +50,6 @@
 
 - **显式文件模式**：`--param`, `--material`, `--curves`, `--output` 全部指定
 - **Config 模式**：从 `forward_cfg.json` 派生路径
-
-### Evaluate
-
-两种评估模式：
-
-- `--feas`：参数化 + 目标场计算 + StVK 残差评估，报告材料可行性超限
-- `--inverse`：完整逆设计 + 形状误差度量（`dist_inv`, `dist_proj`）
-
-输出为 JSON（stdout）。
 
 ## 输入/输出
 
@@ -108,15 +98,6 @@
 | **输出** | 目标参考 | `Resources/param/{modelDir}/{model}_targ.obj` |
 | **输出** | distortion 诊断 | `Resources/param/{modelDir}/*_distortion.txt` + `*_colored.ply` |
 
-### Evaluate 输入输出
-
-| 方向 | 文件 | 路径 |
-|------|------|------|
-| **输入** | 目标网格 | `Resources/meshes/{model}.obj` |
-| **输入** | 分割（可选） | `Resources/segment/{modelDir}/seg_id.txt` |
-| **输入** | 材料曲线 | `Resources/materials/poly-curves.json` |
-| **输出** | JSON | stdout |
-
 ## cfg.json 格式
 
 ```json
@@ -161,7 +142,7 @@
 | Section | Key | 类型 | 说明 |
 |---------|-----|------|------|
 | `model` | `name` | string | 模型名称 |
-| `model` | `mesh_path` | string | 目标网格 OBJ 路径（Parameterize/Evaluate 使用；`segment.enabled=false` 时 Inverse/InverseWhole 也直接读此文件） |
+| `model` | `mesh_path` | string | 目标网格 OBJ 路径（Parameterize 使用；`segment.enabled=false` 时 Inverse/InverseWhole 也直接读此文件） |
 | `material` | `curves_path` | string | 材料多项式曲线 JSON 路径 |
 | `segment` | `enabled` | bool | `true`（默认）= 读分割 patches；`false` = 用 `mesh_path` 作单 patch |
 | `segment` | `path` | string | 分割输出根目录（`enabled=true` 时必填，`false` 时可空） |
@@ -209,14 +190,13 @@ GrayScaleMorph/
 ├── inverse_whole/main.cpp           # InverseWhole 全 patch 入口
 ├── forward/main.cpp                 # Forward 入口
 ├── parameterize/main.cpp            # Parameterize 入口
-├── eval/main.cpp                    # Evaluate 入口
 └── CMakeLists.txt
 ```
 
 ### CMake 构建结构
 
 - **grayscale_core**（STATIC 库）：编译 `core/` + `inverse/inverse_design.cpp`，链接 libigl、geometry-central、TinyAD
-- **Parameterize**、**Forward**、**Inverse**、**Evaluate**：各自只有一个 `main.cpp`，链接 `grayscale_core`
+- **Parameterize**、**Forward**、**Inverse**：各自只有一个 `main.cpp`，链接 `grayscale_core`
 - **GrayScaleMorph**：`Inverse` 的向后兼容别名（编译自同一 `inverse/main.cpp`）
 - 所有可执行文件输出到 `build/bin/`
 
@@ -378,3 +358,50 @@ d = Δλ² + W_kap · Δκ²
 
 ## Bug 修复历史
 详见 `PLAN.md`，记录了 10 个关键问题的诊断与修复（fixedIdx 为空、能量不一致、adjoint 错误等），所有 P0 bug 已修复。
+
+## 全局参数（platewidth / poisson_ratio）
+
+**自 2026-04-30 起**：cfg.json 不再独立维护 `platewidth` 与 `poisson_ratio`，统一从 `Resources/setup/global.json` 读取（详见 `Resources/setup/MODULE.md`）。
+
+| 字段 | 旧位置 | 新位置 |
+|------|--------|--------|
+| `platewidth` | `solver.platewidth` 重复维护于 `cfg.json`、`inverse_cfg.json`、`inverse_whole_cfg.json`、`verify_cfg.json` | `Resources/setup/global.json` 统一为 40.0 |
+| `poisson_ratio` | `inverse/inverse_design.cpp:102` 硬编码 `constexpr double nu = 0.5` + `forward/main.cpp` `kNu` | `Resources/setup/global.json`（默认 0.5）|
+
+### 加载流程（C++ 端）
+
+`Config` 构造函数调用 `loadGlobalSetup()`（`core/setup.{hpp,cpp}`）:
+1. 读 `Resources/setup/global.json`（cfg.json 所在目录向上递归查找）
+2. `solver.platewidth` / `solver.poisson_ratio` 用 setup 默认填充
+3. 若 cfg 显式包含 `solver.platewidth` / `solver.poisson_ratio`，**override** 并 `spdlog::warn` 标注偏离值
+4. 校验 `setup.thickness == material.thickness`，不一致直接 throw
+
+`InverseDesignProblem` 新增字段 `poisson_ratio`（默认 0.5），由调用者从 `Config::solver.poisson_ratio` 填入。`runInverseDesign` 内 `nu` 改为 `prob.poisson_ratio`。
+
+`forward/main.cpp` 走自己的 cfg 解析路径，但同样调用 `loadGlobalSetup`；`ForwardInputs.poissonRatio` 替代旧 `kNu`。
+
+`verify/main.cpp` 同理。
+
+### Override 语义
+
+如需某个实验单独用不同 platewidth（例：未来重启 `inverse_whole=80` 实验）：
+```json
+{
+  "solver": {
+    "platewidth": 80.0
+  }
+}
+```
+loader 会 `spdlog::warn` 提示偏离 setup 默认。
+
+### 已知 platewidth 几何语义不一致（未修复）
+
+`platewidth` 在三个地方被理解为不同的几何量：
+
+| 位置 | 含义 |
+|------|------|
+| `inverse/main.cpp:199` | PCA 旋转后 P 的 X 方向 extent |
+| `parameterize/main.cpp:202` | 3D bbox 最大轴向 extent |
+
+只统一**数值**为 40 不会让 mesh 缩放到完全一致的 plate 尺寸。本次重构仅集中数值,语义统一留给后续单独任务。
+

@@ -29,8 +29,14 @@ struct InverseDesignProblem
     const ActiveComposite* ac = nullptr;
 
     // -- Solver settings ------------------------------------------------------
+    /// Poisson ratio for the elastic energy. Sourced from
+    /// `Resources/setup/global.json` via `Config::setup.poisson_ratio` and may
+    /// be overridden per-experiment by `solver.poisson_ratio` in cfg.json.
+    double poisson_ratio      = 0.5;
     int    max_iter           = 20;
     double epsilon            = 1e-6;
+    int    verify_max_iter    = 100;  ///< Newton budget for projected-material forward verification (in-loop diagnostic + final).
+    double verify_epsilon     = 1e-6; ///< Newton tolerance for projected-material forward verification.
     double w_s                = 1.0;
     double w_b                = 1.0;
     double wM_kap             = 0.1;
@@ -40,8 +46,44 @@ struct InverseDesignProblem
     double wP_kap             = 0.01;
     double wP_lam             = 0.01;
     double penalty_threshold  = 0.01;
-    double betaP              = 50.0;
+    /// Lorentzian-soft-min well sharpness for the energy-weighted joint
+    /// material penalty (replaces the old log-sum-exp `betaP`).  Larger -> sharper
+    /// wells around each feasible (lambda, kappa) point.  Default ~30000 produces
+    /// wells of width ~ grid_spacing/3 in energy distance for the default material
+    /// window (h=1, nu=0.5, lambda spacing ~0.011, kappa spacing ~0.033).
+    double well_scale         = 30000.0;
+    /// Maximum number of SGN alternating stages (OptKap + OptLam pairs).
+    /// Default 5 was the original setting; increase to give the penalty
+    /// more growth steps when wP / well_scale alone are not enough to
+    /// drive the continuous solution onto the feasible grid.
+    int    max_stages         = 5;
+    double wP_growth_factor   = 2.0; ///< Per-stage multiplier for wP_kap/wP_lam when penalty exceeds threshold.
+    double wM_decay_factor    = 0.5; ///< Per-stage multiplier for wM_kap and wM_lam (1.0 = keep constant).
+    double wL_decay_factor    = 0.5; ///< Per-stage multiplier for wL_kap and wL_lam (1.0 = keep constant).
     int    patch_id           = -1;  ///< For logging (-1 = whole mesh)
+
+    // -- Trajectory CSV logging (diagnostic) --------------------------------
+    /// When non-empty, runInverseDesign writes two CSV files inside this
+    /// directory (created if missing):
+    ///     {trajectory_dir}/{trajectory_tag}_inner.csv  -- per Newton step
+    ///     {trajectory_dir}/{trajectory_tag}_outer.csv  -- per OptKap/OptLam/Projected stage
+    /// The inner CSV captures every component of the SGN objective at each
+    /// Newton iteration; the outer CSV records the resolved continuous and
+    /// projected distances + max off-grid residuals at stage boundaries.
+    std::string trajectory_dir;
+    std::string trajectory_tag;
+
+    // -- Oracle override (twin-experiment diagnostic) -----------------------
+    /// If both vectors are non-empty (size = nF), runInverseDesign skips
+    /// `Morphmesh::ComputeMorphophing` (which derives target metric from the
+    /// deformed shape V) and uses these pre-supplied per-face (lambda, kappa)
+    /// directly.  This isolates SGN + projection + forward-verification from
+    /// the V -> (lambda, kappa) discretisation residual that always exists in
+    /// thin-shell theory (equilibrium V never realises the prescribed metric
+    /// exactly).  When the oracle equals the metric used by the Forward run
+    /// that produced the target, dist_proj should collapse to ~0.
+    Eigen::VectorXd oracle_lambda_pf;
+    Eigen::VectorXd oracle_kappa_pf;
 };
 
 /// All outputs from a single inverse design run.

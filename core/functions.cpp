@@ -958,34 +958,76 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 JointMaterialPenaltyPerF_OptKap(IntrinsicGeometryInterface &geometry,
                                 const Eigen::MatrixXi &F,
                                 const FaceData<double> &lambda_pf,
+                                const FaceData<double> &E_face,
                                 const std::vector<double> &feasible_lamb,
                                 const std::vector<double> &feasible_kapp,
-                                double beta)
+                                double thickness,
+                                double poisson_ratio,
+                                double well_scale)
 {
   SurfaceMesh &mesh = geometry.mesh;
   const int nF_mesh = static_cast<int>(mesh.nFaces());
   const int feasible_cnt = static_cast<int>(feasible_lamb.size());
 
+  // Log-sum-exp soft-min over 49 feasible (lambda_j, kappa_j) candidates with
+  // strict Saint-Venant energy distance (Efrati 2009 non-Euclidean plate) and
+  // target-metric area element sqrt(det(gbar_j)) = lambdabar_j^2:
+  //
+  //   d^2_j(lambda, kappa) = lambdabar_j^2 * E_face/(1-nu) *
+  //                          [ a*(lambda^2 - lambdabar_j^2)^2
+  //                          + b*(kappa - kappabar_j)^2 ],     a=h/4, b=h^3/12
+  //
+  //   penalty_per_face = -log( sum_j exp(-beta * d^2_j) ) / nF
+  //
+  // `beta` is the soft-min sharpness (variable name `well_scale` retained for
+  // ABI stability; semantically it is now beta of the LSE form).  As beta ->
+  // infinity the penalty converges to nF^-1 * min_j(beta*d^2_j) (hard-min) up
+  // to an additive constant.  Mirrors the metric inside `findFeasibleEnergy`
+  // in inverse_design.cpp so projection and continuous gradient share the
+  // same Voronoi tessellation.
+  //
+  // Numerical note: for very large beta * d^2_j some terms underflow to 0 in
+  // double precision, but the closest grid (d^2 ~ 0) always contributes ~1
+  // to the sum so log is well-defined.  Standard log-sum-exp shift is not
+  // required at the beta range typical for this problem (beta ~ 1e3-3e4).
+  const double one_minus_nu = 1.0 - poisson_ratio;
+  const double a_unit       = thickness / 4.0;
+  const double b_unit       = thickness * thickness * thickness / 12.0;
+  const double beta         = well_scale;
+
   auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
 
   func.add_elements<1>(
       TinyAD::range(mesh.nFaces()),
-      [&lambda_pf, feasible_lamb, feasible_kapp, feasible_cnt, beta, nF_mesh, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&lambda_pf, &E_face, feasible_lamb, feasible_kapp, feasible_cnt,
+       a_unit, b_unit, one_minus_nu, beta,
+       nF_mesh, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
         T kap = element.variables(f_idx)(0);
         double lam_f = lambda_pf[mesh.face(f_idx)];
+        const double E_f     = E_face[mesh.face(f_idx)];
+        const double E_scale = E_f / one_minus_nu;
+        const double lam_sq  = lam_f * lam_f;
 
         T r = T(0.0);
         for (int j = 0; j < feasible_cnt; ++j) {
-          double d_lam = lam_f - feasible_lamb[j];
-          T d_kap = kap - T(feasible_kapp[j]);
-          T dist2 = T(d_lam * d_lam) + d_kap * d_kap;
-          r += exp(-T(beta) * dist2);
+          // Stretching term (constant w.r.t. autodiff kap).
+          const double feas_lam_sq = feasible_lamb[j] * feasible_lamb[j];
+          const double dlsq        = lam_sq - feas_lam_sq;
+          const double lam_term    = E_scale * a_unit * dlsq * dlsq;
+
+          // Bending term (autodiff in kap).
+          T d_kap    = kap - T(feasible_kapp[j]);
+          T kap_term = T(E_scale * b_unit) * d_kap * d_kap;
+
+          // Per-candidate area-element factor sqrt(det(gbar_j)) = feas_lam_sq.
+          T dist2_E = (T(lam_term) + kap_term) * T(feas_lam_sq);
+          r += exp(-T(beta) * dist2_E);
         }
 
-        return -log(r + T(1e-12)) / T(nF_mesh);
+        return -log(r + T(1e-30)) / T(nF_mesh);
       });
 
   return func;
@@ -995,34 +1037,57 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 JointMaterialPenaltyPerF_OptLam(IntrinsicGeometryInterface &geometry,
                                 const Eigen::MatrixXi &F,
                                 const FaceData<double> &kappa_pf,
+                                const FaceData<double> &E_face,
                                 const std::vector<double> &feasible_lamb,
                                 const std::vector<double> &feasible_kapp,
-                                double beta)
+                                double thickness,
+                                double poisson_ratio,
+                                double well_scale)
 {
   SurfaceMesh &mesh = geometry.mesh;
   const int nF_mesh = static_cast<int>(mesh.nFaces());
   const int feasible_cnt = static_cast<int>(feasible_lamb.size());
 
+  // LSE soft-min, strict SV form -- see JointMaterialPenaltyPerF_OptKap.
+  const double one_minus_nu = 1.0 - poisson_ratio;
+  const double a_unit       = thickness / 4.0;
+  const double b_unit       = thickness * thickness * thickness / 12.0;
+  const double beta         = well_scale;
+
   auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
 
   func.add_elements<1>(
       TinyAD::range(mesh.nFaces()),
-      [&kappa_pf, feasible_lamb, feasible_kapp, feasible_cnt, beta, nF_mesh, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      [&kappa_pf, &E_face, feasible_lamb, feasible_kapp, feasible_cnt,
+       a_unit, b_unit, one_minus_nu, beta,
+       nF_mesh, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
         T lam = element.variables(f_idx)(0);
         double kap_f = kappa_pf[mesh.face(f_idx)];
+        const double E_f     = E_face[mesh.face(f_idx)];
+        const double E_scale = E_f / one_minus_nu;
+
+        T lam_sq = lam * lam;
 
         T r = T(0.0);
         for (int j = 0; j < feasible_cnt; ++j) {
-          T d_lam = lam - T(feasible_lamb[j]);
-          double d_kap = kap_f - feasible_kapp[j];
-          T dist2 = d_lam * d_lam + T(d_kap * d_kap);
-          r += exp(-T(beta) * dist2);
+          // Stretching term (autodiff in lambda).
+          const double feas_lam_sq = feasible_lamb[j] * feasible_lamb[j];
+          T dlsq_AD                = lam_sq - T(feas_lam_sq);
+          T lam_term               = T(E_scale * a_unit) * dlsq_AD * dlsq_AD;
+
+          // Bending term (constant w.r.t. autodiff lam).
+          const double d_kap        = kap_f - feasible_kapp[j];
+          const double kap_term_val = E_scale * b_unit * d_kap * d_kap;
+
+          // Per-candidate area-element factor sqrt(det(gbar_j)) = feas_lam_sq.
+          T dist2_E = (lam_term + T(kap_term_val)) * T(feas_lam_sq);
+          r += exp(-T(beta) * dist2_E);
         }
 
-        return -log(r + T(1e-12)) / T(nF_mesh);
+        return -log(r + T(1e-30)) / T(nF_mesh);
       });
 
   return func;

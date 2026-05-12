@@ -18,7 +18,6 @@
     "cond_path": "../Resources/cond/"
   },
   "solver": {
-    "platewidth": 80.0,
     "max_iter": 20,
     "nf_min": 200,
     "epsilon": 1e-6,

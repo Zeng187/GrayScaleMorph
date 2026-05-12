@@ -1,0 +1,36 @@
+{
+  "model": {
+    "name": "cardioid"
+  },
+  "design": {
+    "design_name": "heart",
+    "param_path":  "../Resources/param/",
+    "target_path": "../Resources/forward/",
+    "cond_path":   "../Resources/cond/",
+    "design_path": "../Resources/design/",
+    "morph_path":  "../Resources/morph/"
+  },
+  "material": {
+    "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
+  },
+  "solver": {
+    "max_iter": 100,
+    "epsilon": 1e-6,
+    "w_s": 1.0,
+    "w_b": 1.0,
+    "wM_kap": 0.1,
+    "wL_kap": 0.1,
+    "wM_lam": 0.0,
+    "wL_lam": 0.1,
+    "wP_kap": 0.01,
+    "wP_lam": 0.01,
+    "penalty_threshold": 0.01,
+    "well_scale": 30000.0,
+    "wP_growth_factor": 2.0,
+    "wM_decay_factor": 0.5,
+    "wL_decay_factor": 0.5,
+    "verify_max_iter": 100,
+    "verify_epsilon": 1e-6,
+    "max_stages": 5
+  }
+}

@@ -244,6 +244,7 @@ int main(int argc, char* argv[])
     problem.MrInv     = MrInv_p;
     problem.fixedIdx  = fixedIdx_p;
     problem.ac        = &ac;
+    problem.poisson_ratio     = solver.poisson_ratio;
     problem.max_iter          = solver.max_iter;
     problem.epsilon           = solver.epsilon;
     problem.w_s               = solver.w_s;
@@ -255,7 +256,7 @@ int main(int argc, char* argv[])
     problem.wP_kap            = solver.wP_kap;
     problem.wP_lam            = solver.wP_lam;
     problem.penalty_threshold = solver.penalty_threshold;
-    problem.betaP             = solver.betaP;
+    problem.well_scale        = solver.well_scale;
     problem.patch_id          = target_pid;
 
     InverseDesignResult result = runInverseDesign(problem);

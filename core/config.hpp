@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "setup.hpp"
+
 /// Central configuration for the GrayScaleMorph pipeline.
 ///
 /// Reads a JSON file organised into five sections:
@@ -47,8 +49,12 @@ public:
     } patch;
 
     // ── Solver parameters ────────────────────────────────────────────
+    /// `platewidth` and `poisson_ratio` are seeded from `Resources/setup/global.json`
+    /// at construction time and may be overridden per-experiment by repeating
+    /// the same key inside cfg.json (a warning is logged in that case).
     struct Solver {
-        double platewidth       = 40.0;
+        double platewidth       = 40.0;   // overwritten by setup.platewidth (then optionally cfg)
+        double poisson_ratio    = 0.5;    // overwritten by setup.poisson_ratio (then optionally cfg)
         int    max_iter         = 20;
         int    nf_min           = 200;
         double epsilon          = 1e-6;
@@ -61,8 +67,14 @@ public:
         double wP_kap           = 0.01;
         double wP_lam           = 0.01;
         double penalty_threshold = 0.01;
-        double betaP            = 50.0;
+        /// Lorentzian-soft-min sharpness for the energy-weighted joint material
+        /// penalty (replaces the old log-sum-exp `betaP` form, kept readable
+        /// from cfg under the legacy `betaP` key as a fallback).
+        double well_scale       = 30000.0;
     } solver;
+
+    // ── Shared physical setup (loaded from Resources/setup/global.json) ─
+    GlobalSetup setup;
 
     // ── Convenience path builders ────────────────────────────────────
 

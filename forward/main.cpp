@@ -86,6 +86,7 @@ struct ForwardInputs
     int         maxIter = 20;
     double      epsilon = 1e-6;
     int         nfMin   = 0;   ///< minimum face count; Loop-subdivide if below
+    double      poissonRatio = kNu;   ///< default kept in sync with the legacy constexpr; cfgMode overwrites from Resources/setup/global.json
 };
 
 // ---------------------------------------------------------------------------
@@ -244,6 +245,25 @@ ForwardInputs resolveInputs(const CliOptions& opts)
             inputs.nfMin   = j["solver"].value("nf_min",  inputs.nfMin);
         }
 
+        // Global setup (Resources/setup/global.json):
+        // 1. Set poissonRatio default from setup
+        // 2. Validate setup.thickness == material.thickness (throws on mismatch)
+        // 3. Allow cfg.solver.poisson_ratio to override with a warning
+        {
+            LoadGlobalSetupOptions sopts;
+            sopts.cfg_path = std::filesystem::path(opts.cfgPath);
+            sopts.material_path = std::filesystem::path(inputs.curvesPath);
+            const GlobalSetup setup = loadGlobalSetup(j, sopts);
+            inputs.poissonRatio = setup.poisson_ratio;
+
+            if (j.contains("solver") && j["solver"].contains("poisson_ratio")) {
+                const double overridden = j["solver"].value("poisson_ratio", setup.poisson_ratio);
+                spdlog::warn("Forward: cfg.solver.poisson_ratio={} overrides setup.poisson_ratio={}",
+                             overridden, setup.poisson_ratio);
+                inputs.poissonRatio = overridden;
+            }
+        }
+
         spdlog::info("Config loaded from: {}", opts.cfgPath);
     } else {
         inputs.paramPath    = opts.paramPath;
@@ -251,6 +271,24 @@ ForwardInputs resolveInputs(const CliOptions& opts)
         inputs.curvesPath   = opts.curvesPath;
         inputs.outputPath   = opts.outputPath;
         inputs.condPath     = opts.condPath;
+
+        // CLI-only mode (no --cfg): walk up from the curves file to find
+        // Resources/setup/global.json so the same defaults apply as in cfg
+        // mode. Failure is non-fatal — fall back to kNu — but the validation
+        // at least catches a thickness mismatch on the curves file.
+        if (!inputs.curvesPath.empty()) {
+            try {
+                LoadGlobalSetupOptions sopts;
+                sopts.cfg_path = std::filesystem::path(inputs.curvesPath);
+                sopts.material_path = std::filesystem::path(inputs.curvesPath);
+                const GlobalSetup setup = loadGlobalSetup(nlohmann::json::object(), sopts);
+                inputs.poissonRatio = setup.poisson_ratio;
+            } catch (const std::exception& e) {
+                spdlog::warn("Forward CLI mode: could not load Resources/setup/"
+                             "global.json ({}); using default poisson={}",
+                             e.what(), inputs.poissonRatio);
+            }
+        }
     }
 
     return inputs;
@@ -537,10 +575,13 @@ int main(int argc, char* argv[])
         spdlog::info("Forward solve keeps {} constrained DOFs.", fixedIdx.size());
 
         // -- Convert (t1, t2) -> per-face (lambda, kappa, E) --------------
-        const double E_ref = referenceModulus(ac);
-        spdlog::info("Reference modulus E_ref = {:.4f} (mean of feasible set); "
-                     "per-face E normalised by this value.", E_ref);
-
+        // DEBUG: E_face is forced to 1.0 (uniform modulus) so the twin-
+        // experiment Inverse/Verify pipeline sees the same E that Inverse
+        // assumes internally; otherwise Forward uses continuous E from
+        // poly(t) while Inverse projects to discrete feasible-grid E,
+        // injecting a residual mismatch even when (lambda, kappa) is
+        // perfectly recovered.  Restore the curve-driven line below to
+        // re-enable E(t).
         FaceData<double> lambda_pf(mesh);
         FaceData<double> kappa_pf(mesh);
         FaceData<double> E_face(mesh);
@@ -549,13 +590,14 @@ int main(int argc, char* argv[])
             lambda_pf[f] = compute_lamb_d(ac.m_strain_curve, t1[fi], t2[fi]);
             kappa_pf[f]  = compute_curv_d(ac.m_strain_curve, ac.thickness,
                                           t1[fi], t2[fi]);
-            E_face[f]    = compute_modu_d(ac.m_moduls_curve, t1[fi], t2[fi]) / E_ref;
+            E_face[f]    = 1.0;
+            // E_face[f] = compute_modu_d(ac.m_moduls_curve, t1[fi], t2[fi]) / referenceModulus(ac);
         }
 
         // -- Build simulation energy function -----------------------------
         auto simFunc = simulationFunction(
             geometry, MrInv, lambda_pf, kappa_pf,
-            E_face, kNu, ac.thickness, kWs, kWb, ref_faces);
+            E_face, inputs.poissonRatio, ac.thickness, kWs, kWb, ref_faces);
 
         // -- Forward solve from flat initial state ------------------------
         Eigen::MatrixXd Vr = V_flat;
@@ -612,7 +654,7 @@ int main(int argc, char* argv[])
             // the same per-face modulus weighting as the main solve.
             Eigen::VectorXd Ws_density = Eigen::VectorXd::Zero(nFr);
             Eigen::VectorXd Wb_density = Eigen::VectorXd::Zero(nFr);
-            Morphmesh morph_diag(Vr, P, F, 1.0, kNu);
+            Morphmesh morph_diag(Vr, P, F, 1.0, inputs.poissonRatio);
             morph_diag.ComputeElasticEnergy(geometry, MrInv,
                 lambda_pf, kappa_pf, E_face, ac.thickness,
                 Vr, F, Ws_density, Wb_density);

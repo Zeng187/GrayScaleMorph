@@ -1,0 +1,38 @@
+{
+  "model": {
+    "name": "quatrefoil"
+  },
+  "design": {
+    "design_name": "petal",
+    "param_path":  "../Resources/param/",
+    "target_path": "../Resources/forward/",
+    "cond_path":   "../Resources/cond/",
+    "design_path": "../Resources/design/",
+    "morph_path":  "../Resources/morph/",
+    "trajectory_dir": "../Resources/morph/quatrefoil/trajectory"
+  },
+  "material": {
+    "curves_path": "../Resources/materials/grayscale-material-poly-curves.json"
+  },
+  "solver": {
+    "max_iter": 100,    
+    "max_stages": 10,
+    "epsilon": 1e-6,
+    "w_s": 1.0,
+    "w_b": 1.0,
+    "wM_kap": 0.0,
+    "wL_kap": 0.01,
+    "wM_lam": 0.0,
+    "wL_lam": 0.01,
+    "wP_kap": 0.00,
+    "wP_lam": 0.00,
+    "penalty_threshold": 0.0,
+    "betaP": 50.0,
+    "wP_growth_factor": 0.5,
+    "wM_decay_factor": 0.1,
+    "wL_decay_factor": 0.1,
+    "verify_max_iter": 100,
+    "verify_epsilon": 1e-6,
+    "oracle_init": false
+  }
+}

@@ -20,6 +20,7 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/deps/TinyAD-src" EXCLUDE_FROM_ALL)
 # ═══════════════════════════════════════════════════════════════════════
 add_library(grayscale_core STATIC
   core/config.hpp             core/config.cpp
+  core/setup.hpp              core/setup.cpp
   core/material.hpp           core/material.cpp
   core/output.hpp             core/output.cpp
   core/patch_utils.h          core/patch_utils.cpp
@@ -78,10 +79,6 @@ target_link_libraries(Parameterize PRIVATE grayscale_core)
 add_executable(Forward forward/main.cpp)
 target_link_libraries(Forward PRIVATE grayscale_core)
 
-# Evaluation entry point (replaces FeasEval + PatchMetrics)
-add_executable(Evaluate eval/main.cpp)
-target_link_libraries(Evaluate PRIVATE grayscale_core)
-
 # Verify: compute per-face (lambda, kappa) on an arbitrary 3D mesh
 add_executable(Verify verify/main.cpp)
 target_link_libraries(Verify PRIVATE grayscale_core)
@@ -90,9 +87,7 @@ if (MSVC)
     target_compile_options(Inverse PRIVATE /utf-8)
     target_compile_options(GrayScaleMorph PRIVATE /utf-8)
     target_compile_options(Forward PRIVATE /utf-8)
-    target_compile_options(Evaluate PRIVATE /utf-8)
     set_target_properties(Inverse PROPERTIES LINK_FLAGS "/STACK:10485760")
     set_target_properties(GrayScaleMorph PROPERTIES LINK_FLAGS "/STACK:10485760")
     set_target_properties(Forward PROPERTIES LINK_FLAGS "/STACK:10485760")
-    set_target_properties(Evaluate PROPERTIES LINK_FLAGS "/STACK:10485760")
 endif()

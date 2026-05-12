@@ -23,7 +23,6 @@
   },
   
   "solver": {
-    "platewidth": 40.0,
     "max_iter": 100,
     "nf_min": 200,
     "epsilon": 1e-6,

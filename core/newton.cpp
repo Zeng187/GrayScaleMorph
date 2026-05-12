@@ -7,6 +7,8 @@
 
 #include <TinyAD/Utils/NewtonDecrement.hh>
 
+#include <limits>
+
 using namespace geometrycentral::surface;
 
 template <class Func, class Solver>
@@ -296,10 +298,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     }
     theta += s * deltaTheta;
 
-    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
+    const double newton_dec = TinyAD::newton_decrement(deltaTheta, g);
+    std::cout << "Decrement in iteration " << i << ": " << newton_dec
               << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
               << std::endl;
-    if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
+    if(newton_dec < lim || solver.info() != Eigen::Success)
       break;
 
     callback(x);
@@ -587,7 +590,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double w_s,
                                     double w_b,
                                     const std::vector<int>& ref_faces,
-                                    const std::function<void(const Eigen::VectorXd&)>& callback)
+                                    const std::function<void(const Eigen::VectorXd&)>& callback,
+                                    const InnerIterLog& iter_log)
 {
   geometry.requireVertexIndices();
 
@@ -718,6 +722,26 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
             << std::endl;
 
+  // Per-Newton-iteration trajectory logger.  Captures the four components of
+  // the SGN objective J(theta) = ||x-xT||^2_M + wM*theta^T M_theta theta
+  //                            + wL*theta^T L theta + wP * penaltyFunc(theta)
+  // at the initial state (iter=-1) and after every Newton step (iter=0..).
+  // No-op when iter_log.csv is null (default).
+  auto log_inner_row = [&](int iter, double dec, double s) {
+    if (!iter_log.csv) return;
+    const double data_fit = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double wM_term  = wM * theta.dot(M_theta * theta);
+    const double wL_term  = wL * theta.dot(L * theta);
+    const double wP_term  = wP * penaltyFunc.eval(theta);
+    const double total    = data_fit + wM_term + wL_term + wP_term;
+    *iter_log.csv << iter_log.stage << "," << iter_log.phase << "," << iter
+                  << "," << wM << "," << wL << "," << wP << "," << iter_log.beta
+                  << "," << data_fit << "," << wM_term << "," << wL_term << "," << wP_term
+                  << "," << total << "," << dec << "," << s << "\n";
+  };
+  log_inner_row(-1, std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN());
+
   LUSolver solver;
 
   for(int i = 0; i < max_iters; ++i)
@@ -761,10 +785,12 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     }
     theta += s * deltaTheta;
 
-    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
+    const double newton_dec = TinyAD::newton_decrement(deltaTheta, g);
+    std::cout << "Decrement in iteration " << i << ": " << newton_dec
               << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
               << std::endl;
-    if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
+    log_inner_row(i, newton_dec, s);
+    if(newton_dec < lim || solver.info() != Eigen::Success)
       break;
 
     callback(x);
@@ -802,7 +828,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                     double w_s,
                                     double w_b,
                                     const std::vector<int>& ref_faces,
-                                    const std::function<void(const Eigen::VectorXd&)>& callback)
+                                    const std::function<void(const Eigen::VectorXd&)>& callback,
+                                    const InnerIterLog& iter_log)
 {
   geometry.requireVertexIndices();
 
@@ -934,6 +961,26 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
             << std::endl;
 
+  // Per-Newton-iteration trajectory logger.  Captures the four components of
+  // the SGN objective J(theta) = ||x-xT||^2_M + wM*theta^T M_theta theta
+  //                            + wL*theta^T L theta + wP * penaltyFunc(theta)
+  // at the initial state (iter=-1) and after every Newton step (iter=0..).
+  // No-op when iter_log.csv is null (default).
+  auto log_inner_row = [&](int iter, double dec, double s) {
+    if (!iter_log.csv) return;
+    const double data_fit = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double wM_term  = wM * theta.dot(M_theta * theta);
+    const double wL_term  = wL * theta.dot(L * theta);
+    const double wP_term  = wP * penaltyFunc.eval(theta);
+    const double total    = data_fit + wM_term + wL_term + wP_term;
+    *iter_log.csv << iter_log.stage << "," << iter_log.phase << "," << iter
+                  << "," << wM << "," << wL << "," << wP << "," << iter_log.beta
+                  << "," << data_fit << "," << wM_term << "," << wL_term << "," << wP_term
+                  << "," << total << "," << dec << "," << s << "\n";
+  };
+  log_inner_row(-1, std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN());
+
   LUSolver solver;
 
   for(int i = 0; i < max_iters; ++i)
@@ -977,10 +1024,12 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     }
     theta += s * deltaTheta;
 
-    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
+    const double newton_dec = TinyAD::newton_decrement(deltaTheta, g);
+    std::cout << "Decrement in iteration " << i << ": " << newton_dec
               << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
               << std::endl;
-    if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
+    log_inner_row(i, newton_dec, s);
+    if(newton_dec < lim || solver.info() != Eigen::Success)
       break;
 
     callback(x);

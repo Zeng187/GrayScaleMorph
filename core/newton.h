@@ -6,8 +6,22 @@
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 
 #include <functional>
+#include <ostream>
+#include <string>
 
 struct M_Poly_Curve;
+
+/// Per-iteration log handle for the SGN _Penalty solvers.  When `csv` is
+/// non-null, the solver appends one CSV row at the initial state (iter=-1)
+/// and one row after each Newton step (iter=0..max_iters-1) with all
+/// objective components.  `stage`, `phase`, and `beta` are written as tag
+/// columns so multiple stages of the outer alternating loop share one CSV.
+struct InnerIterLog {
+    std::ostream* csv  = nullptr;
+    int           stage = -1;
+    std::string   phase;       ///< "OptKap" or "OptLam"
+    double        beta  = 0.0; ///< softmin sharpness from the outer cfg
+};
 
 template <class Func, class Solver>
 void newton(
@@ -101,7 +115,8 @@ double h,
 double w_s,
 double w_b,
 const std::vector<int>& ref_faces,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const InnerIterLog& iter_log = {});
 
 
 
@@ -127,4 +142,5 @@ double h,
 double w_s,
 double w_b,
 const std::vector<int>& ref_faces,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const InnerIterLog& iter_log = {});
