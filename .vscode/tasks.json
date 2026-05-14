@@ -8,7 +8,9 @@
             "args": [
                 "-S", "${workspaceFolder}",
                 "-B", "${workspaceFolder}/build",
-                "-G", "Ninja"
+                "-G", "Visual Studio 18 2026",
+                "-A", "x64",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
             ],
             "group": "build",
             "problemMatcher": []

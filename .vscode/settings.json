@@ -2,7 +2,11 @@
     "cmake.sourceDirectory": "${workspaceFolder}",
     "cmake.buildDirectory": "${workspaceFolder}/build",
     "cmake.configureOnOpen": true,
-    "cmake.generator": "Visual Studio 17 2022",
+    "cmake.generator": "Visual Studio 18 2026",
+    "cmake.platform": "x64",
+    "cmake.configureArgs": [
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+    ],
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "files.associations": {
         "*.hpp": "cpp",
