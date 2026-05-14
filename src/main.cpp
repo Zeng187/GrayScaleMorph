@@ -253,10 +253,10 @@ int main(int argc, char* argv[])
             wP_lam *= 10;
         }
 
-        wM_kap *= 0.1;
-        wL_kap *= 0.1;
-        wM_lam *= 0.1;
-        wL_lam *= 0.1;
+        // wM_kap *= 0.1;
+        // wL_kap *= 0.1;
+        // wM_lam *= 0.1;
+        // wL_lam *= 0.1;
 
         if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
             break;
