@@ -53,9 +53,12 @@ int main(int argc, char* argv[])
     const std::string model = config.ModelSetting.ModelName;
     const std::string patches_dir = config.PathSetting.SegmentDir + model + "_original_planA/patches/";
     const std::string out_dir     = "../outputs/" + model + "/";
+    const std::string design_dir  = config.PathSetting.DesignDir + model + "_original_planA/";
     std::filesystem::create_directories(out_dir);
+    std::filesystem::create_directories(design_dir);
     spdlog::info("Patches dir : {}", patches_dir);
     spdlog::info("Output dir  : {}", out_dir);
+    spdlog::info("Design dir  : {}", design_dir);
 
     ///***************************************** Phase 1: read + parameterize each patch *****************************************///
 
@@ -316,6 +319,24 @@ int main(int argc, char* argv[])
         V_inv *= 1.0 / globalScale;
         std::string output_mesh_inv_path = out_dir + "patch_" + std::to_string(pd.idx) + "_inv.obj";
         igl::writeOBJ(output_mesh_inv_path, V_inv, F);
+
+        // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
+        {
+            std::string mat_path = design_dir + "patch_" + std::to_string(pd.idx) + "_material.txt";
+            std::ofstream ofs(mat_path);
+            ofs << "# face_id  t1  t2\n";
+            for (Face f : mesh.faces()) {
+                double sum = 0.0; int cnt = 0;
+                for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
+                double kap = sum / cnt;
+                double lam = lambda_pf_s[f];
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+                double t1 = ac.feasible_t_vals[idx].first;
+                double t2 = ac.feasible_t_vals[idx].second;
+                ofs << f.getIndex() << "  " << t1 << "  " << t2 << "\n";
+            }
+            spdlog::info("Patch {} material -> {}", pd.idx, mat_path);
+        }
 
         spdlog::info("Patch {} done.", pd.idx);
     }

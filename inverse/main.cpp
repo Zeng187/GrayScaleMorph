@@ -54,8 +54,10 @@ int main(int /*argc*/, char* /*argv*/[])
     const std::string param_dir = config.PathSetting.ParamDir + model + "/";
     const std::string p_path   = param_dir + model + "_P.obj";
     const std::string sc_path  = param_dir + "global_scale.txt";
-    const std::string out_dir  = "../outputs/" + model + "/";
+    const std::string out_dir    = "../outputs/" + model + "/";
+    const std::string design_dir = config.PathSetting.DesignDir + model + "/";
     std::filesystem::create_directories(out_dir);
+    std::filesystem::create_directories(design_dir);
 
     // -------- Load target V --------
     Eigen::MatrixXd V;
@@ -225,6 +227,24 @@ int main(int /*argc*/, char* /*argv*/[])
     auto V_inv = Vr;
     V_inv *= 1.0 / globalScale;
     igl::writeOBJ(out_dir + model + "_inv.obj", V_inv, F);
+
+    // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
+    {
+        const std::string mat_path = design_dir + model + "_material.txt";
+        std::ofstream ofs(mat_path);
+        ofs << "# face_id  t1  t2\n";
+        for (Face f : mesh.faces()) {
+            double sum = 0.0; int cnt = 0;
+            for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
+            double kap = sum / cnt;
+            double lam = lambda_pf_s[f];
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+            double t1 = ac.feasible_t_vals[idx].first;
+            double t2 = ac.feasible_t_vals[idx].second;
+            ofs << f.getIndex() << "  " << t1 << "  " << t2 << "\n";
+        }
+        spdlog::info("Material -> {}", mat_path);
+    }
 
     spdlog::info("Inverse (single mesh): done.  Output → {}", out_dir);
     return 0;

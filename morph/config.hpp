@@ -14,15 +14,27 @@ public:
     // All paths are interpreted as relative to the binary's working
     // directory (typically <S2_GrayScaleMorph>/<module>/, so a value of
     // "../../Resources/0_meshes/" resolves to the project Resources tree).
+    // Mirrors Resources/0_setup/path.json verbatim (18 keys).
     struct
     {
+        std::string ConesDir;
         std::string MeshesDir;
+        std::string MeshesPostDir;
+        std::string PoseDir;
+        std::string PostDir;
+        std::string RidgeDir;
+        std::string SetupDir;
+        std::string YoshizawaDir;
+        std::string ConfigDir;
+        std::string InitialDir;
         std::string MaterialsDir;
         std::string SegmentDir;
-        std::string ParamDir;
         std::string DesignDir;
         std::string MorphDir;
+        std::string ParamDir;
+        std::string CondDir;
         std::string ForwardDir;
+        std::string FigsDir;
     } PathSetting;
 
     // --------- Model selection ----------

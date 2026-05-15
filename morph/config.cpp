@@ -39,13 +39,24 @@ Config::Config(const std::string& filePath) {
         std::exit(1);
     }
     const auto& p = pj["Paths"];
-    PathSetting.MeshesDir    = p["MeshesDir"][0];
-    PathSetting.MaterialsDir = p["MaterialsDir"][0];
-    PathSetting.SegmentDir   = p["SegmentDir"][0];
-    PathSetting.ParamDir     = p["ParamDir"][0];
-    PathSetting.DesignDir    = p["DesignDir"][0];
-    PathSetting.MorphDir     = p.value("MorphDir",   json::array({""}))[0];
-    PathSetting.ForwardDir   = p.value("ForwardDir", json::array({""}))[0];
+    PathSetting.ConesDir      = p["ConesDir"][0];
+    PathSetting.MeshesDir     = p["MeshesDir"][0];
+    PathSetting.MeshesPostDir = p["MeshesPostDir"][0];
+    PathSetting.PoseDir       = p["PoseDir"][0];
+    PathSetting.PostDir       = p["PostDir"][0];
+    PathSetting.RidgeDir      = p["RidgeDir"][0];
+    PathSetting.SetupDir      = p["SetupDir"][0];
+    PathSetting.YoshizawaDir  = p["YoshizawaDir"][0];
+    PathSetting.ConfigDir     = p["ConfigDir"][0];
+    PathSetting.InitialDir    = p["InitialDir"][0];
+    PathSetting.MaterialsDir  = p["MaterialsDir"][0];
+    PathSetting.SegmentDir    = p["SegmentDir"][0];
+    PathSetting.DesignDir     = p["DesignDir"][0];
+    PathSetting.MorphDir      = p["MorphDir"][0];
+    PathSetting.ParamDir      = p["ParamDir"][0];
+    PathSetting.CondDir       = p["CondDir"][0];
+    PathSetting.ForwardDir    = p["ForwardDir"][0];
+    PathSetting.FigsDir       = p["FigsDir"][0];
     spdlog::info("PathConfig loaded from {}", pathJsonRef);
 
     // -------- Model --------
