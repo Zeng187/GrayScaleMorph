@@ -1,15 +1,11 @@
 {
-	"Resource": {
-		"ResourcePath": [ "../../Resources/" ],
-		"MaterialPath": [ "../../Resources/1_materials/grayscale-material.json" ]
-	},
+	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName": [ "hemisphere" ],
-		"Postfix": [ ".obj" ],
-		"InputPath": [ "../../Resources/0_meshes/" ]
+		"ModelName":    [ "beetle_simp" ],
+		"MaterialName": [ "grayscale-material" ],
+		"Postfix":      [ ".obj" ]
 	},
 	"OutputSettings": {
-		"OutputPath": [ "../outputs/" ],
 		"Mode": [ "cover" ]
 	},
 	"RuntimeSettings": {
@@ -30,5 +26,4 @@
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 50 ]
 	}
-
 }

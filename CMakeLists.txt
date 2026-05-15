@@ -1,9 +1,7 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-set(ProjectName "GrayScaleMorph")
-
-project(${ProjectName} LANGUAGES CXX)
+project(GrayScaleMorph LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -18,64 +16,77 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/deps/libigl-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/geometry-central-src" EXCLUDE_FROM_ALL)
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps/TinyAD-src" EXCLUDE_FROM_ALL)
 
-file(GLOB_RECURSE RSC_FILES
-    "${CMAKE_SOURCE_DIR}/src/*.json"
+
+# ---------------------------------------------------------------------------
+# libmorph: shared static library used by every sub-binary
+# ---------------------------------------------------------------------------
+
+add_library(morph STATIC
+  morph/common.hpp
+  morph/config.hpp
+  morph/config.cpp
+  morph/material.hpp
+  morph/material.cpp
+  morph/timer.h
+  morph/solvers.h
+  morph/newton.h
+  morph/newton.cpp
+  morph/parameterization.h
+  morph/parameterization.cpp
+  morph/LocalGlobalSolver.h
+  morph/LocalGlobalSolver.cpp
+  morph/simulation_utils.h
+  morph/simulation_utils.cpp
+  morph/functions.h
+  morph/functions.cpp
+  morph/morphmesh.hpp
+  morph/morphmesh.cpp
+  morph/morph_functions.hpp
+  morph/morph_functions.cpp
+  morph/output.hpp
+  morph/output.cpp
+  morph/boundary_utils.h
+  morph/boundary_utils.cpp
 )
 
-add_executable(
-  ${ProjectName}
-  src/main.cpp
-  src/common.hpp
-  src/config.hpp
-  src/config.cpp
-  src/material.hpp
-  src/material.cpp
-  src/timer.h
-  src/solvers.h
-  src/newton.h
-  src/newton.cpp
-  src/parameterization.h
-  src/parameterization.cpp
-  src/LocalGlobalSolver.h
-  src/LocalGlobalSolver.cpp
-  src/simulation_utils.h
-  src/simulation_utils.cpp
-  src/functions.h
-  src/functions.cpp
-  src/morphmesh.hpp
-  src/morphmesh.cpp
-  src/morph_functions.hpp
-  src/morph_functions.cpp
-  src/output.hpp
-  src/output.cpp
-  src/boundary_utils.h
-  src/boundary_utils.cpp
-  .gitignore
-  ${RSC_FILES}
+target_link_libraries(morph
+  PUBLIC
+    igl::core
+    igl::opengl
+    igl::stb
+    glfw::glfw
+    geometry-central
+    TinyAD
 )
 
-target_link_libraries(
-  ${ProjectName}
-  PRIVATE
-  igl::core
-  igl::opengl
-  igl::stb
-  glfw::glfw
-  geometry-central
-  TinyAD
+target_include_directories(morph
+  PUBLIC
+    "${CMAKE_SOURCE_DIR}/morph"
+    "${CMAKE_SOURCE_DIR}/include"
 )
 
-target_include_directories(
-  ${ProjectName}
-  PRIVATE
-  "${CMAKE_SOURCE_DIR}/include"
-)
+if (MSVC)
+  target_compile_options(morph PRIVATE /utf-8)
+endif()
+
+
+# ---------------------------------------------------------------------------
+# Sub-binaries: param / forward / inverse
+# ---------------------------------------------------------------------------
+
+function(add_sub_binary BIN_NAME SUBDIR)
+  add_executable(${BIN_NAME} ${SUBDIR}/main.cpp)
+  target_link_libraries(${BIN_NAME} PRIVATE morph)
+  set_target_properties(${BIN_NAME} PROPERTIES
+      VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/${SUBDIR}")
+  if (MSVC)
+    target_compile_options(${BIN_NAME} PRIVATE /utf-8)
+    set_target_properties(${BIN_NAME} PROPERTIES LINK_FLAGS "/STACK:10485760")
+  endif()
+endfunction()
+
+add_sub_binary(Param   param)
+add_sub_binary(Forward forward)
+add_sub_binary(Inverse inverse)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
-set_target_properties(${ProjectName} PROPERTIES
-    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
-)
-if (MSVC)
-    target_compile_options(${ProjectName} PRIVATE /utf-8)
-    set_target_properties(${ProjectName} PROPERTIES LINK_FLAGS "/STACK:10485760")
-endif()

@@ -1,0 +1,29 @@
+{
+	"PathConfig": [ "../../Resources/0_setup/path.json" ],
+	"Model": {
+		"ModelName":    [ "beetle_simp" ],
+		"MaterialName": [ "grayscale-material" ],
+		"Postfix":      [ ".obj" ]
+	},
+	"OutputSettings": {
+		"Mode": [ "cover" ]
+	},
+	"RuntimeSettings": {
+		"Platewidth": [ 40 ],
+		"MaxIter": [ 20 ],
+		"nFmin": [ 500 ],
+		"epsilon": [ 1e-6 ],
+		"wM": [ 0.01 ],
+		"wL": [ 0.01 ],
+		"wM_kap": [ 0.1 ],
+		"wL_kap": [ 0.1 ],
+		"wM_lam": [ 0.00 ],
+		"wL_lam": [ 0.1 ],
+		"w_s": [ 1 ],
+		"w_b": [ 1 ],
+		"wP_kap": [ 0.00 ],
+		"wP_lam": [ 0.00 ],
+		"penalty_threshold": [ 0.01 ],
+		"betaP": [ 50 ]
+	}
+}
