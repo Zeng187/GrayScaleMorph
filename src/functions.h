@@ -4,6 +4,8 @@
 #include <TinyAD/ScalarFunction.hh>
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 
+#include <vector>
+
 TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
 simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                    const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv,
@@ -13,7 +15,8 @@ simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometr
                    double nu,
                    double h,
                    double w_s,
-                   double w_b);
+                   double w_b,
+                   const std::vector<int> &ref_faces);
 
 TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
 simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
@@ -24,7 +27,8 @@ simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometr
                    double nu,
                    double h,
                    double w_s,
-                   double w_b);
+                   double w_b,
+                   const std::vector<int> &ref_faces);
 
 TinyAD::ScalarFunction<3, double, geometrycentral::surface::VertexRangeF::Etype>
 simulationFunction(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
@@ -77,7 +81,8 @@ adjointFunction_FixLam_OptKap(geometrycentral::surface::IntrinsicGeometryInterfa
                               double nu,
                               double h,
                               double w_s,
-                              double w_b);
+                              double w_b,
+                              const std::vector<int> &ref_faces);
 
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction_FixLam_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
@@ -110,7 +115,8 @@ adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterf
                                double nu,
                                double h,
                                double w_s,
-                               double w_b);
+                               double w_b,
+                               const std::vector<int> &ref_faces);
 
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunctionWithMaterial_Lay1(geometrycentral::surface::IntrinsicGeometryInterface &geometry,

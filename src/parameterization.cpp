@@ -10,6 +10,11 @@
 #include <igl/harmonic.h>
 #include <igl/loop.h>
 #include <igl/map_vertices_to_circle.h>
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 Eigen::MatrixXd tutteEmbedding(const Eigen::MatrixXd& V, Eigen::MatrixXi& F, const std::vector<int>& boundary_indices)
 {
@@ -134,6 +139,134 @@ void parameterization(const Eigen::MatrixXd& V,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Anonymous-namespace helpers: lambda statistics + gauge-shift scale.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct LambdaStats
+{
+    double lmin = std::numeric_limits<double>::infinity();
+    double lmax = -std::numeric_limits<double>::infinity();
+    double lmean = 0.0;
+};
+
+LambdaStats computeLambdaStats(
+    const Eigen::MatrixXd& V,
+    const Eigen::MatrixXi& F,
+    const Eigen::MatrixXd& P)
+{
+    LambdaStats s;
+    double lsum = 0.0;
+    double area_sum = 0.0;
+    for (int fi = 0; fi < F.rows(); ++fi) {
+        Eigen::Vector3d v0 = V.row(F(fi, 0));
+        Eigen::Vector3d v1 = V.row(F(fi, 1));
+        Eigen::Vector3d v2 = V.row(F(fi, 2));
+        Eigen::Matrix<double, 3, 2> M;
+        M.col(0) = v1 - v0; M.col(1) = v2 - v0;
+
+        Eigen::Vector2d p0 = P.row(F(fi, 0));
+        Eigen::Vector2d p1 = P.row(F(fi, 1));
+        Eigen::Vector2d p2 = P.row(F(fi, 2));
+        Eigen::Matrix2d Mr;
+        Mr.col(0) = p1 - p0; Mr.col(1) = p2 - p0;
+
+        const double det_Mr = Mr.determinant();
+        if (std::abs(det_Mr) < 1e-16) continue;
+
+        Eigen::Matrix<double, 3, 2> Fg = M * Mr.inverse();
+        Eigen::Matrix2d a = Fg.transpose() * Fg;
+        const double lam = std::sqrt(std::max(0.0, 0.5 * a.trace()));
+        const double area = 0.5 * std::abs(det_Mr);
+
+        if (lam < s.lmin) s.lmin = lam;
+        if (lam > s.lmax) s.lmax = lam;
+        lsum += area * lam;
+        area_sum += area;
+    }
+    s.lmean = area_sum > 0.0 ? lsum / area_sum : 0.0;
+    return s;
+}
+
+/// Optimal gauge scale t* solving
+///   t* = argmin_t SUM_f A_f · (t·lam_f − clamp(t·lam_f, lam_min, lam_max))²
+/// Initial guess aligns area-weighted geometric mean of λ to window centre,
+/// then iterates set-partitioning refinement up to 5 times.
+double computeGaugeShiftScale(
+    const Eigen::MatrixXd& V,
+    const Eigen::MatrixXi& F,
+    const Eigen::MatrixXd& P,
+    double lambda_min,
+    double lambda_max)
+{
+    const int nF = F.rows();
+    Eigen::VectorXd lambda_raw = Eigen::VectorXd::Ones(nF);
+    Eigen::VectorXd face_area  = Eigen::VectorXd::Zero(nF);
+
+    for (int fi = 0; fi < nF; ++fi) {
+        Eigen::Vector3d v0 = V.row(F(fi, 0));
+        Eigen::Vector3d v1 = V.row(F(fi, 1));
+        Eigen::Vector3d v2 = V.row(F(fi, 2));
+        Eigen::Matrix<double, 3, 2> M;
+        M.col(0) = v1 - v0; M.col(1) = v2 - v0;
+
+        Eigen::Vector2d p0 = P.row(F(fi, 0));
+        Eigen::Vector2d p1 = P.row(F(fi, 1));
+        Eigen::Vector2d p2 = P.row(F(fi, 2));
+        Eigen::Matrix2d Mr;
+        Mr.col(0) = p1 - p0; Mr.col(1) = p2 - p0;
+
+        const double det_Mr = Mr.determinant();
+        face_area(fi) = 0.5 * std::abs(det_Mr);
+
+        if (std::abs(det_Mr) < 1e-16) { lambda_raw(fi) = 1.0; continue; }
+
+        Eigen::Matrix<double, 3, 2> Fg = M * Mr.inverse();
+        Eigen::Matrix2d a = Fg.transpose() * Fg;
+        lambda_raw(fi) = std::sqrt(std::max(0.0, 0.5 * a.trace()));
+    }
+
+    double log_sum = 0.0, area_sum = 0.0;
+    for (int fi = 0; fi < nF; ++fi) {
+        if (lambda_raw(fi) > 0.0 && face_area(fi) > 0.0) {
+            log_sum  += face_area(fi) * std::log(lambda_raw(fi));
+            area_sum += face_area(fi);
+        }
+    }
+    if (area_sum <= 0.0) return 1.0;
+
+    const double geom_mean = std::exp(log_sum / area_sum);
+    if (!(geom_mean > 0.0) || !std::isfinite(geom_mean)) return 1.0;
+
+    double t = std::sqrt(lambda_min * lambda_max) / geom_mean;
+    if (!(t > 0.0) || !std::isfinite(t)) return 1.0;
+
+    for (int iter = 0; iter < 5; ++iter) {
+        double num = 0.0, den = 0.0;
+        bool any_outside = false;
+        for (int fi = 0; fi < nF; ++fi) {
+            const double tl = t * lambda_raw(fi);
+            const double A  = face_area(fi);
+            const double l  = lambda_raw(fi);
+            if (tl < lambda_min) {
+                num += A * l * lambda_min; den += A * l * l; any_outside = true;
+            } else if (tl > lambda_max) {
+                num += A * l * lambda_max; den += A * l * l; any_outside = true;
+            }
+        }
+        if (!any_outside || den <= 0.0) break;
+        const double t_new = num / den;
+        if (!(t_new > 0.0) || !std::isfinite(t_new)) break;
+        if (std::abs(t_new - t) < 1e-10 * std::max(1.0, std::abs(t))) { t = t_new; break; }
+        t = t_new;
+    }
+    return t;
+}
+
+} // anonymous namespace
+
 Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
                                  Eigen::MatrixXi& F,
                                  double lambda1,
@@ -168,6 +301,31 @@ Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
   F.conservativeResize(nF, 3);
 
   parameterization(V, P, F, lambda1, lambda2, wD, n_iter, lim);
+
+  // Gauge shift: globally scale P so the per-face lambda distribution
+  // lands inside the material window [lambda1, lambda2].  Only P is scaled
+  // — V stays in the caller's coordinate system so physical curvature /
+  // thickness units stay consistent downstream.
+  const auto pre = computeLambdaStats(V, F, P);
+  spdlog::info("Lambda window pre-shift : [{:.4f}, {:.4f}], area-weighted mean {:.4f}",
+               pre.lmin, pre.lmax, pre.lmean);
+
+  const double t = computeGaugeShiftScale(V, F, P, lambda1, lambda2);
+  if (t > 0.0 && std::isfinite(t) && std::abs(t - 1.0) > 1e-12)
+  {
+    P /= t;
+    spdlog::info("Gauge shift t={:.6f}, P scaled by {:.6f}", t, 1.0 / t);
+  }
+  else
+  {
+    spdlog::info("Gauge shift t={:.6f}, no scaling applied", t);
+  }
+
+  const auto post = computeLambdaStats(V, F, P);
+  spdlog::info("Lambda window post-shift: [{:.4f}, {:.4f}], area-weighted mean {:.4f}",
+               post.lmin, post.lmax, post.lmean);
+  spdlog::info("Material window target  : [{:.4f}, {:.4f}]", lambda1, lambda2);
+
   return P;
 }
 

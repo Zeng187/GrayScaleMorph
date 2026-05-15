@@ -48,6 +48,8 @@ add_executable(
   src/morph_functions.cpp
   src/output.hpp
   src/output.cpp
+  src/boundary_utils.h
+  src/boundary_utils.cpp
   .gitignore
   ${RSC_FILES}
 )

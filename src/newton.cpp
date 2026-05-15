@@ -125,6 +125,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireCotanLaplacian();
@@ -174,7 +175,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) +  wL * th.dot(L * th);
@@ -273,7 +274,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -287,8 +296,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
-    << "\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -466,7 +478,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -480,7 +500,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -497,8 +521,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   const Eigen::MatrixXd& targetV,
                                   const Eigen::MatrixXd& initV,
                                   const FaceData<Eigen::Matrix2d>& MrInv,
-                                  FaceData<double>& theta1,  
-                                  VertexData<double>& theta2,  
+                                  FaceData<double>& theta1,
+                                  VertexData<double>& theta2,
                                   const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                   const std::vector<int>& fixedIdx,
                                   int max_iters,
@@ -510,6 +534,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   double h,
                                   double w_s,
                                   double w_b,
+                                  const std::vector<int>& ref_faces,
                                   const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   SurfaceMesh& mesh = geometry.mesh;
@@ -604,7 +629,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     theta1.fromVector(th);
 
     // IMPORTANT: call the overload with (FaceData<double> lambda, VertexData<double> kappa)
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
 
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
@@ -707,7 +732,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
 
@@ -724,7 +757,17 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))<< "\n";
+  // Force one final forward-sim convergence on the reverted x so the
+  // returned Vr reflects the *actual* stable elastic equilibrium for the
+  // current (theta1, theta2) — not the half-converged state of iter N.
+  // This makes OptLam-exit distance == OptKap-entry distance (no jump
+  // between stages).  May reveal that the last iter's printed "Distance"
+  // was misleading (forward sim wasn't fully converged), but that's
+  // physically honest.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -901,7 +944,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -915,7 +966,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -1092,7 +1147,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -1106,7 +1169,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -1137,6 +1204,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double h,
                                     double w_s,
                                     double w_b,
+                                    const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireCotanLaplacian();
@@ -1186,7 +1254,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1284,7 +1352,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -1298,7 +1374,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) << "\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget)) <<"\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -1477,7 +1557,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -1491,7 +1579,11 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\n";
+  // Force final forward-sim convergence — see other variants for rationale.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -1521,6 +1613,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           double h,
                                                           double w_s,
                                                           double w_b,
+                                                          const std::vector<int>& ref_faces,
                                                           const std::function<void(const Eigen::VectorXd&)>& callback)
 {
   geometry.requireFaceAreas();
@@ -1623,7 +1716,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     theta1.fromVector(th);
 
     // IMPORTANT: overload with FaceData<double> lambda
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1737,7 +1830,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
 
@@ -1754,7 +1855,17 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))<< "\n";
+  // Force one final forward-sim convergence on the reverted x so the
+  // returned Vr reflects the *actual* stable elastic equilibrium for the
+  // current (theta1, theta2) — not the half-converged state of iter N.
+  // This makes OptLam-exit distance == OptKap-entry distance (no jump
+  // between stages).  May reveal that the last iter's printed "Distance"
+  // was misleading (forward sim wasn't fully converged), but that's
+  // physically honest.
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -1933,7 +2044,15 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -1947,7 +2066,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) << "\n";
+  // distance(theta) call removed — see other variants for rationale.
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -2125,7 +2244,15 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
     double s = lineSearch(theta, deltaTheta, f, g, distance, [&](double s) { x = x_old + s * deltaX; });
     if(s < 0)
     {
-      std::cout << "Line search failed\n";
+      // lineSearch's 32 shrinks each call eval() which runs forward newton
+      // and can drag x into a different equilibrium basin.  When the search
+      // ultimately fails, x is left in a contaminated state (not at
+      // equilibrium for the current theta).  Revert x to the last-good
+      // equilibrium (x_old) so the subsequent Final SPN distance() call
+      // converges in the correct basin instead of jumping out to a wrong
+      // local minimum.
+      x = x_old;
+      std::cout << "Line search failed (x reverted to last good state)\n";
       break;
     }
     theta += s * deltaTheta;
@@ -2139,7 +2266,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
     callback(x);
   }
 
-  std::cout << "Final SPN energy: " << distance(theta) << "\n";
+  // distance(theta) call removed — see other variants for rationale.
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)

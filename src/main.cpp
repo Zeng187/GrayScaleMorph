@@ -25,6 +25,7 @@
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "output.hpp"
+#include "boundary_utils.h"
 
 // #define __VERFIY_FORWARD_PREDIT__
 #define __VERFIY_INVERSE_DESIGN__
@@ -92,9 +93,12 @@ int main(int argc, char* argv[])
     geometry.refreshQuantities();
 
 
-    std::vector<bool> boundary_vertex_flags(nV, false);
-    std::vector<bool> boundary_face_flags(nF, false);
-    std::vector<int> boundary_ref_indices(nF, 0);
+    // Boundary-face reference mapping (BFS on dual graph).  Used by both:
+    //  - Morphmesh Pass 2 to extrapolate boundary κ from interior neighbours
+    //  - functions.cpp computeShapeOperator_{Sim,Adj} to take dihedral
+    //    stencils from a complete (non-truncated) interior face's neighborhood
+    std::vector<bool> is_boundary_face;
+    std::vector<int> ref_faces = buildRefFaces(mesh, is_boundary_face);
 
 
     ///***************************************** Material Settings *****************************************///
@@ -112,8 +116,8 @@ int main(int argc, char* argv[])
     double E = 1.0;
     double nu = 0.5;
     Morphmesh morph_mesh(V, P, F, E, nu);
-    Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF,boundary_vertex_flags,boundary_face_flags,boundary_ref_indices,
-        MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t, &morph_mesh.vertex_area_sum);
+    Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF, ref_faces,
+        MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t, morph_mesh.kappa_pv_t, morph_mesh.kappa_pf_t, &morph_mesh.vertex_area_sum);
     Morphmesh::SetMorphophing(morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
         morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t,
         morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
@@ -131,9 +135,6 @@ int main(int argc, char* argv[])
     igl::writeOBJ(output_mesh_targ_path, V_targ, F);
 
 
-    FaceData<bool> is_boundary_face(mesh);
-    FaceData<int> boundary_ref_index(mesh);
-    VertexData<bool> is_boundary_vertex(mesh);
     VertexData<double> lambda_pv_s(mesh, morph_mesh.lambda_pv_s);
     VertexData<double> kappa_pv_s(mesh, morph_mesh.kappa_pv_s);
     FaceData<double> lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
@@ -193,10 +194,10 @@ int main(int argc, char* argv[])
     {
         spdlog::info("Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
         // Vr = targetV;
-        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
         // Compute and output distance and penalties after OptKap
         distance = (Vr - targetV).squaredNorm() / nV;
@@ -208,10 +209,10 @@ int main(int argc, char* argv[])
 
 
         spdlog::info("Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
-        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
         // Compute and output distance and penalties after OptLam
         distance = (Vr - targetV).squaredNorm() / nV;
@@ -236,7 +237,7 @@ int main(int argc, char* argv[])
             }
 
             auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             Eigen::MatrixXd Vr_proj = Vr;
             newton(geometry, Vr_proj, simFunc_proj,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
@@ -253,10 +254,10 @@ int main(int argc, char* argv[])
             wP_lam *= 10;
         }
 
-        // wM_kap *= 0.1;
-        // wL_kap *= 0.1;
-        // wM_lam *= 0.1;
-        // wL_lam *= 0.1;
+        // wM_kap *= 0.5;
+        // wL_kap *= 0.5;
+        // wM_lam *= 0.5;
+        // wL_lam *= 0.5;
 
         if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
             break;
@@ -275,10 +276,10 @@ int main(int argc, char* argv[])
     {
         spdlog::info("Stage {}, OptKap start", k);
         
-        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
-            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
         // Compute and output distance after OptKap
         double distance_kap = (Vr - targetV).squaredNorm() / nV;
@@ -286,10 +287,10 @@ int main(int argc, char* argv[])
 
 
         spdlog::info("Stage {}, OptLam start", k);
-        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b);
+        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, fixedIdx,
             config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
-            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b);
+            E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
         // morph_mesh.lambda_pv_s = lambda_pv_s.toVector();
         // morph_mesh.kappa_pv_s = kappa_pv_s.toVector();
