@@ -85,8 +85,10 @@ function(add_sub_binary BIN_NAME SUBDIR)
   endif()
 endfunction()
 
-add_sub_binary(Param   param)
-add_sub_binary(Forward forward)
-add_sub_binary(Inverse inverse)
+add_sub_binary(Param      param)
+add_sub_binary(ParamAll   param_all)
+add_sub_binary(Forward    forward)
+add_sub_binary(Inverse    inverse)
+add_sub_binary(InverseAll inverse_all)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)

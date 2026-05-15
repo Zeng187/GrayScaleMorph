@@ -1,26 +1,28 @@
-// Param: parameterize all patches of a segmented model, compute a shared
-// globalScale, and write scaled V / P (and the scale) to disk so Inverse
-// and Forward can later read them without recomputing.
+// Param: parameterize a SINGLE mesh and write the result to disk.
 //
-// Outputs under Resources/3_param/{model}/:
-//   patch_{i}_V.obj          — V * globalScale, same F as input patch
-//   patch_{i}_P.obj          — P * globalScale embedded as 3D (z=0), same F
-//   global_scale.txt         — single line "<globalScale>"
+// Input  (from PathSetting.MeshesDir + ModelName + Postfix):
+//   Resources/0_meshes/{model}.obj
+//
+// Output (to   PathSetting.ParamDir + ModelName/):
+//   Resources/3_param/{model}/{model}_V.obj    — scaled V (V * scale)
+//   Resources/3_param/{model}/{model}_P.obj    — scaled P (z=0), same F
+//   Resources/3_param/{model}/global_scale.txt — single line "<scale>"
+//
+// "scale" is computed as Platewidth / P_extent so the parameterised mesh
+// fills the configured plate width.  For a single mesh there is no
+// inter-patch coordination; the multi-patch version (ParamAll) shares a
+// global scale across all patches of a segmented model.
 
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
 #include <igl/loop.h>
 #include <iostream>
 #include <fstream>
-#include <vector>
+#include <iomanip>
 #include <string>
-#include <cmath>
-#include <limits>
 #include <filesystem>
 
 #include <spdlog/spdlog.h>
-#include <geometrycentral/surface/manifold_surface_mesh.h>
-#include <geometrycentral/surface/vertex_position_geometry.h>
 
 #include "config.hpp"
 #include "material.hpp"
@@ -28,105 +30,67 @@
 
 int main(int /*argc*/, char* /*argv*/[])
 {
-    using namespace geometrycentral;
-    using namespace geometrycentral::surface;
-
     Config config("cfg.json");
     ActiveComposite ac(config.materialJsonPath());
     ac.ComputeMaterialCurve();
     ac.ComputeFeasibleVals();
 
-    spdlog::info("Param: start.");
+    spdlog::info("Param (single mesh): start.");
 
     const std::string model = config.ModelSetting.ModelName;
-    const std::string patches_dir = config.PathSetting.SegmentDir + model + "_original_planA/patches/";
-    const std::string out_dir     = config.PathSetting.ParamDir   + model + "/";
+    const std::string in_path = config.PathSetting.MeshesDir + model + config.ModelSetting.Postfix;
+    const std::string out_dir = config.PathSetting.ParamDir   + model + "/";
     std::filesystem::create_directories(out_dir);
-    spdlog::info("Patches dir : {}", patches_dir);
-    spdlog::info("Output dir  : {}", out_dir);
+    spdlog::info("Input  : {}", in_path);
+    spdlog::info("Output : {}", out_dir);
 
-    // ===== Phase 1: read & parameterize each patch =====
-    struct PatchData {
-        size_t idx;
-        Eigen::MatrixXd V;
-        Eigen::MatrixXi F;
-        Eigen::MatrixXd P;
-        size_t nV, nF;
-    };
-    std::vector<PatchData> patches;
-
-    for (size_t i = 0;; ++i) {
-        std::string path = patches_dir + "patch_" + std::to_string(i) + ".obj";
-        Eigen::MatrixXd Vp;
-        Eigen::MatrixXi Fp;
-        if (!igl::readOBJ(path, Vp, Fp)) {
-            spdlog::info("No more patches after idx {}.", i - 1);
-            break;
-        }
-        size_t nV = Vp.rows();
-        size_t nF = Fp.rows();
-        spdlog::info("Patch {}: read {} V, {} F.", i, nV, nF);
-
-        while (nF < config.RuntimeSetting.nFmin) {
-            Eigen::MatrixXd tV = Vp;
-            Eigen::MatrixXi tF = Fp;
-            igl::loop(tV, tF, Vp, Fp);
-            nV = Vp.rows();
-            nF = Fp.rows();
-        }
-
-        spdlog::info("Patch {}: parameterize ...", i);
-        Eigen::MatrixXd P = parameterization(Vp, Fp, ac.range_lam.x, ac.range_lam.y, 0);
-
-        PatchData pd;
-        pd.idx = i;
-        pd.V = std::move(Vp);
-        pd.F = std::move(Fp);
-        pd.P = std::move(P);
-        pd.nV = nV;
-        pd.nF = nF;
-        patches.push_back(std::move(pd));
-    }
-
-    if (patches.empty()) {
-        spdlog::error("No patches found, abort.");
+    // Read mesh
+    Eigen::MatrixXd V;
+    Eigen::MatrixXi F;
+    if (!igl::readOBJ(in_path, V, F)) {
+        spdlog::error("Cannot read mesh: {}", in_path);
         return -1;
     }
+    size_t nV = V.rows();
+    size_t nF = F.rows();
+    spdlog::info("Read {} V, {} F.", nV, nF);
 
-    // ===== Phase 2: globalScale = min(platewidth / P_extent_i) =====
-    double globalScale = std::numeric_limits<double>::infinity();
-    for (const auto& pd : patches) {
-        const double P_extent = (pd.P.colwise().maxCoeff() - pd.P.colwise().minCoeff()).maxCoeff();
-        const double scale_i = config.RuntimeSetting.Platewidth / P_extent;
-        spdlog::info("Patch {}: P_extent = {:.4f}, scale_i = {:.6f}", pd.idx, P_extent, scale_i);
-        if (scale_i < globalScale) globalScale = scale_i;
-    }
-    spdlog::info("globalScale = {:.6f}", globalScale);
-
-    // ===== Phase 3: write scaled V, P, and globalScale to disk =====
-    for (const auto& pd : patches) {
-        Eigen::MatrixXd V_scaled = pd.V * globalScale;
-        Eigen::MatrixXd P_scaled = pd.P * globalScale;
-
-        // Embed P (2D) as 3D with z=0 so we can use the OBJ writer
-        Eigen::MatrixXd P_obj(P_scaled.rows(), 3);
-        P_obj.leftCols(2) = P_scaled;
-        P_obj.col(2).setZero();
-
-        const std::string v_path = out_dir + "patch_" + std::to_string(pd.idx) + "_V.obj";
-        const std::string p_path = out_dir + "patch_" + std::to_string(pd.idx) + "_P.obj";
-        igl::writeOBJ(v_path, V_scaled, pd.F);
-        igl::writeOBJ(p_path, P_obj, pd.F);
-        spdlog::info("Patch {} wrote V → {}", pd.idx, v_path);
-        spdlog::info("Patch {} wrote P → {}", pd.idx, p_path);
+    // Loop subdivision if too coarse
+    while (nF < config.RuntimeSetting.nFmin) {
+        Eigen::MatrixXd tV = V;
+        Eigen::MatrixXi tF = F;
+        igl::loop(tV, tF, V, F);
+        nV = V.rows();
+        nF = F.rows();
     }
 
+    // Parameterise (gauge shift applied internally)
+    spdlog::info("Parameterising...");
+    Eigen::MatrixXd P = parameterization(V, F, ac.range_lam.x, ac.range_lam.y, 0);
+
+    // Single-mesh scale: simply fit Platewidth to the parameterised extent
+    const double P_extent = (P.colwise().maxCoeff() - P.colwise().minCoeff()).maxCoeff();
+    const double scale    = config.RuntimeSetting.Platewidth / P_extent;
+    spdlog::info("P_extent = {:.4f}, scale = {:.6f}", P_extent, scale);
+
+    Eigen::MatrixXd V_scaled = V * scale;
+    Eigen::MatrixXd P_scaled = P * scale;
+
+    // Embed P (2D) as 3D with z=0 for OBJ I/O
+    Eigen::MatrixXd P_obj(P_scaled.rows(), 3);
+    P_obj.leftCols(2) = P_scaled;
+    P_obj.col(2).setZero();
+
+    const std::string v_path  = out_dir + model + "_V.obj";
+    const std::string p_path  = out_dir + model + "_P.obj";
+    const std::string sc_path = out_dir + "global_scale.txt";
+    igl::writeOBJ(v_path, V_scaled, F);
+    igl::writeOBJ(p_path, P_obj,    F);
     {
-        std::ofstream ofs(out_dir + "global_scale.txt");
-        ofs << std::setprecision(17) << globalScale << "\n";
+        std::ofstream ofs(sc_path);
+        ofs << std::setprecision(17) << scale << "\n";
     }
-    spdlog::info("Wrote global_scale.txt = {}", globalScale);
-
-    spdlog::info("Param: done.");
+    spdlog::info("Wrote {} / {} / {}", v_path, p_path, sc_path);
+    spdlog::info("Param (single mesh): done.");
     return 0;
 }
