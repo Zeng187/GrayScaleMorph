@@ -11,6 +11,8 @@
 #include <geometrycentral/surface/manifold_surface_mesh.h>
 #include <geometrycentral/surface/vertex_position_geometry.h>
 
+#include <limits>
+
 Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
                                  Eigen::MatrixXi& F,
                                  double lambda1,
@@ -60,3 +62,32 @@ parameterizationFunction(geometrycentral::surface::VertexPositionGeometry& geome
 
 std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd>
 computeSVDdata(const Eigen::MatrixXd& V, const Eigen::MatrixXd& P, const Eigen::MatrixXi& F);
+
+/**
+ * Per-face lambda statistics (area-weighted), used to inspect/decide gauge shift.
+ * lambda_f = sqrt(0.5 * trace(a)),  a = (V edge matrix * P edge matrix^-1)^T (...)
+ *   - lmin, lmax: per-face min/max
+ *   - lmean    : area-weighted geometric/arithmetic mean (arithmetic, as in code)
+ */
+struct LambdaStats {
+    double lmin  =  std::numeric_limits<double>::infinity();
+    double lmax  = -std::numeric_limits<double>::infinity();
+    double lmean =  0.0;
+};
+LambdaStats computeLambdaStats(const Eigen::MatrixXd& V,
+                               const Eigen::MatrixXi& F,
+                               const Eigen::MatrixXd& P);
+
+/**
+ * Optimal gauge scale t*:
+ *   t* = argmin_t  SUM_f  A_f * (t*lam_f - clip(t*lam_f, lam_min, lam_max))^2
+ * The caller is expected to apply  P /= t*  to land the lambda distribution
+ * in the material window [lam_min, lam_max].  V is *not* touched.
+ * Both V and P should already be in their final (physical) scale so the
+ * lambda statistics reflect the as-printed geometry.
+ */
+double computeGaugeShiftScale(const Eigen::MatrixXd& V,
+                              const Eigen::MatrixXi& F,
+                              const Eigen::MatrixXd& P,
+                              double lambda_min,
+                              double lambda_max);

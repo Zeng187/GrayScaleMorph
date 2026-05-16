@@ -14,22 +14,20 @@ public:
     // All paths are interpreted as relative to the binary's working
     // directory (typically <S2_GrayScaleMorph>/<module>/, so a value of
     // "../../Resources/0_meshes/" resolves to the project Resources tree).
-    // Mirrors Resources/0_setup/path.json verbatim (18 keys).
+    // Mirrors Resources/0_setup/path.json verbatim (16 keys).
     struct
     {
         std::string ConesDir;
         std::string MeshesDir;
         std::string MeshesPostDir;
         std::string PoseDir;
-        std::string PostDir;
         std::string RidgeDir;
-        std::string SetupDir;
-        std::string YoshizawaDir;
         std::string ConfigDir;
         std::string InitialDir;
         std::string MaterialsDir;
         std::string SegmentDir;
         std::string DesignDir;
+        std::string TargetDir;
         std::string MorphDir;
         std::string ParamDir;
         std::string CondDir;
@@ -43,17 +41,19 @@ public:
         std::string ModelName;
         std::string Postfix;
         std::string MaterialName;   // base filename (no .json), used with PathSetting.MaterialsDir
+        std::string DesignName;     // optional: base filename (no .txt) inside DesignDir/{model}/.
+                                    //   Empty -> default per-patch convention "patch_{i}_material".
+                                    //   Set   -> Forward reads "{DesignName}.txt" and writes
+                                    //            "{DesignName}_pred.obj" instead.
     } ModelSetting;
 
-    // --------- Optional: per-binary output override (rarely used) ---------
-    struct
-    {
-        std::string Mode;
-    } OutputSetting;
+    // --------- Physical device / process settings (from SetupDir + "device.json") ---------
+    struct {
+        double platewidth;
+    } DeviceSetting;
 
     // --------- Algorithm hyperparameters ----------
     struct {
-        int    Platewidth;
         int    MaxIter;
         int    nFmin;
         double epsilon;

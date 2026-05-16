@@ -43,15 +43,13 @@ Config::Config(const std::string& filePath) {
     PathSetting.MeshesDir     = p["MeshesDir"][0];
     PathSetting.MeshesPostDir = p["MeshesPostDir"][0];
     PathSetting.PoseDir       = p["PoseDir"][0];
-    PathSetting.PostDir       = p["PostDir"][0];
     PathSetting.RidgeDir      = p["RidgeDir"][0];
-    PathSetting.SetupDir      = p["SetupDir"][0];
-    PathSetting.YoshizawaDir  = p["YoshizawaDir"][0];
     PathSetting.ConfigDir     = p["ConfigDir"][0];
     PathSetting.InitialDir    = p["InitialDir"][0];
     PathSetting.MaterialsDir  = p["MaterialsDir"][0];
     PathSetting.SegmentDir    = p["SegmentDir"][0];
     PathSetting.DesignDir     = p["DesignDir"][0];
+    PathSetting.TargetDir     = p["TargetDir"][0];
     PathSetting.MorphDir      = p["MorphDir"][0];
     PathSetting.ParamDir      = p["ParamDir"][0];
     PathSetting.CondDir       = p["CondDir"][0];
@@ -59,22 +57,23 @@ Config::Config(const std::string& filePath) {
     PathSetting.FigsDir       = p["FigsDir"][0];
     spdlog::info("PathConfig loaded from {}", pathJsonRef);
 
+    // -------- DeviceSetting (sibling of path.json, i.e. <PathConfig dir>/device.json) --------
+    const std::string deviceJsonPath =
+        std::filesystem::path(pathJsonRef).parent_path().string() + "/device.json";
+    json dj = load_json_file(deviceJsonPath);
+    DeviceSetting.platewidth = dj["platewidth"];
+    spdlog::info("DeviceSetting loaded from {} (platewidth={})",
+                 deviceJsonPath, DeviceSetting.platewidth);
+
     // -------- Model --------
     auto& m = j["Model"];
     ModelSetting.ModelName    = m["ModelName"][0];
     ModelSetting.Postfix      = m.value("Postfix",      json::array({".obj"}))[0];
     ModelSetting.MaterialName = m.value("MaterialName", json::array({"grayscale-material"}))[0];
-
-    // -------- Optional output settings --------
-    if (j.contains("OutputSettings")) {
-        OutputSetting.Mode = j["OutputSettings"].value("Mode", json::array({"cover"}))[0];
-    } else {
-        OutputSetting.Mode = "cover";
-    }
+    ModelSetting.DesignName   = m.value("DesignName",   json::array({""}))[0];
 
     // -------- Runtime hyperparameters --------
     auto& rt = j["RuntimeSettings"];
-    RuntimeSetting.Platewidth        = rt["Platewidth"][0];
     RuntimeSetting.MaxIter           = rt["MaxIter"][0];
     RuntimeSetting.nFmin             = rt["nFmin"][0];
     RuntimeSetting.epsilon           = rt["epsilon"][0];

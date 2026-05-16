@@ -2,28 +2,114 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug GrayScaleMorph",
+            "name": "Param (Debug)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Debug/GrayScaleMorph.exe",
+            "program": "${workspaceFolder}/build/Debug/Param.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}/param",
             "environment": [],
-            "console": "integratedTerminal",
-            // "preLaunchTask": "CMake: Build"
+            "console": "integratedTerminal"
         },
         {
-            "name": "Release GrayScaleMorph",
+            "name": "Param (Release)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Release/GrayScaleMorph.exe",
+            "program": "${workspaceFolder}/build/Release/Param.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}/param",
             "environment": [],
-            "console": "integratedTerminal",
-            // "preLaunchTask": "CMake: Build Release"
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "ParamAll (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/ParamAll.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/param_all",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "ParamAll (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/ParamAll.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/param_all",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Inverse (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/Inverse.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/inverse",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Inverse (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/Inverse.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/inverse",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "InverseAll (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/InverseAll.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/inverse_all",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "InverseAll (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/InverseAll.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/inverse_all",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Forward (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/Forward.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/forward",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Forward (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/Forward.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/forward",
+            "environment": [],
+            "console": "integratedTerminal"
         }
     ]
 }

@@ -35,7 +35,7 @@ inline T theta_to_kappa(T theta)
 // ---------------------------------------------------------------------------
 // Internal helpers for shape operator (L) computation via ref_faces mapping.
 //
-// For interior face f, ref_faces[f] == f → no redirect, identical to inline.
+// For interior face f, ref_faces[f] == f -> no redirect, identical to inline.
 // For boundary face f, ref_faces[f] points to a nearby interior face (BFS in
 // buildRefFaces).  The dihedral stencil is taken from that interior face,
 // giving a complete (non-truncated) L matrix at boundary.

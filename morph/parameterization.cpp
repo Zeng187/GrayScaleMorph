@@ -140,17 +140,8 @@ void parameterization(const Eigen::MatrixXd& V,
 }
 
 // ---------------------------------------------------------------------------
-// Anonymous-namespace helpers: lambda statistics + gauge-shift scale.
+// Lambda statistics + gauge-shift scale (public, see parameterization.h).
 // ---------------------------------------------------------------------------
-
-namespace {
-
-struct LambdaStats
-{
-    double lmin = std::numeric_limits<double>::infinity();
-    double lmax = -std::numeric_limits<double>::infinity();
-    double lmean = 0.0;
-};
 
 LambdaStats computeLambdaStats(
     const Eigen::MatrixXd& V,
@@ -190,10 +181,6 @@ LambdaStats computeLambdaStats(
     return s;
 }
 
-/// Optimal gauge scale t* solving
-///   t* = argmin_t SUM_f A_f · (t·lam_f − clamp(t·lam_f, lam_min, lam_max))²
-/// Initial guess aligns area-weighted geometric mean of λ to window centre,
-/// then iterates set-partitioning refinement up to 5 times.
 double computeGaugeShiftScale(
     const Eigen::MatrixXd& V,
     const Eigen::MatrixXi& F,
@@ -265,8 +252,6 @@ double computeGaugeShiftScale(
     return t;
 }
 
-} // anonymous namespace
-
 Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
                                  Eigen::MatrixXi& F,
                                  double lambda1,
@@ -302,29 +287,8 @@ Eigen::MatrixXd parameterization(const Eigen::MatrixXd& V,
 
   parameterization(V, P, F, lambda1, lambda2, wD, n_iter, lim);
 
-  // Gauge shift: globally scale P so the per-face lambda distribution
-  // lands inside the material window [lambda1, lambda2].  Only P is scaled
-  // — V stays in the caller's coordinate system so physical curvature /
-  // thickness units stay consistent downstream.
-  const auto pre = computeLambdaStats(V, F, P);
-  spdlog::info("Lambda window pre-shift : [{:.4f}, {:.4f}], area-weighted mean {:.4f}",
-               pre.lmin, pre.lmax, pre.lmean);
-
-  const double t = computeGaugeShiftScale(V, F, P, lambda1, lambda2);
-  if (t > 0.0 && std::isfinite(t) && std::abs(t - 1.0) > 1e-12)
-  {
-    P /= t;
-    spdlog::info("Gauge shift t={:.6f}, P scaled by {:.6f}", t, 1.0 / t);
-  }
-  else
-  {
-    spdlog::info("Gauge shift t={:.6f}, no scaling applied", t);
-  }
-
-  const auto post = computeLambdaStats(V, F, P);
-  spdlog::info("Lambda window post-shift: [{:.4f}, {:.4f}], area-weighted mean {:.4f}",
-               post.lmin, post.lmax, post.lmean);
-  spdlog::info("Material window target  : [{:.4f}, {:.4f}]", lambda1, lambda2);
+  // Gauge shift is now applied by the caller, *after* V/P have been scaled to
+  // physical (device) units.  See param/main.cpp + param_all/main.cpp.
 
   return P;
 }

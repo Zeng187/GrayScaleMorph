@@ -50,17 +50,23 @@ int main(int argc, char* argv[])
 
     ///***************************************** Patch I/O setup *****************************************///
 
-    const std::string model = config.ModelSetting.ModelName;
-    const std::string patches_dir = config.PathSetting.SegmentDir + model + "_original_planA/patches/";
-    const std::string out_dir     = "../outputs/" + model + "/";
-    const std::string design_dir  = config.PathSetting.DesignDir + model + "_original_planA/";
-    std::filesystem::create_directories(out_dir);
+    const std::string model       = config.ModelSetting.ModelName;
+    const std::string target_dir  = config.PathSetting.TargetDir + model + "/";
+    const std::string param_dir   = config.PathSetting.ParamDir  + model + "/";
+    const std::string cond_dir    = config.PathSetting.CondDir   + model + "/";
+    const std::string design_dir  = config.PathSetting.DesignDir + model + "/";
+    const std::string morph_dir   = config.PathSetting.MorphDir  + model + "/";
+    std::filesystem::create_directories(morph_dir);
     std::filesystem::create_directories(design_dir);
-    spdlog::info("Patches dir : {}", patches_dir);
-    spdlog::info("Output dir  : {}", out_dir);
-    spdlog::info("Design dir  : {}", design_dir);
+    spdlog::info("Target dir : {}", target_dir);
+    spdlog::info("Param  dir : {}", param_dir);
+    spdlog::info("Cond   dir : {}", cond_dir);
+    spdlog::info("Design dir : {}", design_dir);
+    spdlog::info("Morph  dir : {}", morph_dir);
 
-    ///***************************************** Phase 1: read + parameterize each patch *****************************************///
+    ///***************************************** Phase 1: read pre-scaled V/P from disk *****************************************///
+    // V comes from TargetDir (scaled), P comes from ParamDir (scaled).  ParamAll
+    // must have produced these + global_scale.txt + per-patch cond files.
 
     struct PatchData {
         size_t idx;
@@ -72,40 +78,34 @@ int main(int argc, char* argv[])
     std::vector<PatchData> patches;
 
     for (size_t i = 0;; ++i) {
-        std::string path = patches_dir + "patch_" + std::to_string(i) + ".obj";
+        std::string v_path = target_dir + "patch_" + std::to_string(i) + "_V.obj";
+        std::string p_path = param_dir  + "patch_" + std::to_string(i) + "_P.obj";
         Eigen::MatrixXd Vp;
         Eigen::MatrixXi Fp;
-        if (!igl::readOBJ(path, Vp, Fp)) {
+        if (!igl::readOBJ(v_path, Vp, Fp)) {
             spdlog::info("No more patches after idx {}.", i - 1);
             break;
         }
-        size_t nV = Vp.rows();
-        size_t nF = Fp.rows();
-        spdlog::info("Patch {}: read {} V, {} F.", i, nV, nF);
-
-        // Loop subdivision until nF reaches nFmin
-        while (nF < config.RuntimeSetting.nFmin) {
-            Eigen::MatrixXd tV = Vp;
-            Eigen::MatrixXi tF = Fp;
-            igl::loop(tV, tF, Vp, Fp);
-            nV = Vp.rows();
-            nF = Fp.rows();
+        Eigen::MatrixXd P_loaded3;
+        Eigen::MatrixXi F_p;
+        if (!igl::readOBJ(p_path, P_loaded3, F_p)) {
+            spdlog::error("Patch {} V exists but P missing: {}.  Run ParamAll first.", i, p_path);
+            return -1;
         }
-        if (nV != Vp.rows() || nF != Fp.rows()) {
-            spdlog::info("Patch {}: subdivided to {} V, {} F.", i, nV, nF);
+        if (P_loaded3.rows() != Vp.rows()) {
+            spdlog::error("Patch {}: P vertex count ({}) != V count ({}).",
+                          i, P_loaded3.rows(), Vp.rows());
+            return -1;
         }
-
-        // Parameterize (gauge shift is applied internally on P; V untouched)
-        spdlog::info("Patch {}: parameterize ...", i);
-        Eigen::MatrixXd P = parameterization(Vp, Fp, ac.range_lam.x, ac.range_lam.y, 0);
 
         PatchData pd;
         pd.idx = i;
         pd.V = std::move(Vp);
         pd.F = std::move(Fp);
-        pd.P = std::move(P);
-        pd.nV = nV;
-        pd.nF = nF;
+        pd.P = P_loaded3.leftCols(2);
+        pd.nV = pd.V.rows();
+        pd.nF = pd.F.rows();
+        spdlog::info("Patch {}: read {} V, {} F.", i, pd.nV, pd.nF);
         patches.push_back(std::move(pd));
     }
     spdlog::info("Total patches: {}", patches.size());
@@ -115,30 +115,15 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    ///***************************************** Phase 2: globalScale = min(platewidth / P_extent_i) *****************************************///
-
-    double globalScale = std::numeric_limits<double>::infinity();
-    for (const auto& pd : patches) {
-        const double P_extent = (pd.P.colwise().maxCoeff() - pd.P.colwise().minCoeff()).maxCoeff();
-        const double scale_i = config.RuntimeSetting.Platewidth / P_extent;
-        spdlog::info("Patch {}: P_extent = {:.4f}, scale_i = {:.6f}", pd.idx, P_extent, scale_i);
-        if (scale_i < globalScale) globalScale = scale_i;
-    }
-    spdlog::info("globalScale (shared across all patches) = {:.6f}", globalScale);
-
-    ///***************************************** Phase 3: per-patch inverse design *****************************************///
+    ///***************************************** Phase 2: per-patch inverse design *****************************************///
+    // V/P are already in physical (device) units; no re-scaling here.
 
     for (auto& pd : patches) {
         spdlog::info("=================================================");
         spdlog::info("Inverse design for patch {} ({} V, {} F)", pd.idx, pd.nV, pd.nF);
         spdlog::info("=================================================");
 
-        // Uniformly scale V and P by globalScale -> per-face lambda is invariant
-        // under such uniform scaling, so gauge-shifted P stays centered in the
-        // material window even after this scaling.
-        pd.V *= globalScale;
-        pd.P *= globalScale;
-
+        // V and P are already scaled by globalScale (done by ParamAll).
         // Aliases so the existing inverse-design code below reads naturally.
         Eigen::MatrixXd& V = pd.V;
         Eigen::MatrixXi& F = pd.F;
@@ -163,8 +148,24 @@ int main(int argc, char* argv[])
         FaceData<Eigen::MatrixXd> M = precomputeM(mesh, V, F);
         FaceData<Eigen::Matrix2d> MrInv = precomputeMrInv(mesh, P, F);
 
-        std::vector<int> fixedVertexIdx = findCenterVertexIndices(P, F);
-        std::vector<int> fixedIdx = findCenterFaceIndices(P, F);  // 9 DOF indices
+        // Boundary condition: read 3 vertex indices from cond file written by ParamAll
+        std::vector<int> fixedVertexIdx;
+        {
+            const std::string cond_path = cond_dir + "patch_" + std::to_string(pd.idx) + "_bound_center.txt";
+            std::ifstream ifs(cond_path);
+            if (!ifs.is_open()) {
+                spdlog::error("Cannot read cond file: {}.  Run ParamAll first.", cond_path);
+                return -1;
+            }
+            int v0, v1, v2;
+            ifs >> v0 >> v1 >> v2;
+            fixedVertexIdx = {v0, v1, v2};
+            spdlog::info("Patch {} cond: v0={} v1={} v2={}", pd.idx, v0, v1, v2);
+        }
+        std::vector<int> fixedIdx;  // 9 DOF indices
+        for (int v : fixedVertexIdx)
+            for (int k = 0; k < 3; ++k) fixedIdx.push_back(3 * v + k);
+        std::sort(fixedIdx.begin(), fixedIdx.end());
 
         double E = 1.0;
         double nu = 0.5;
@@ -176,11 +177,8 @@ int main(int argc, char* argv[])
             morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
             morph_mesh.kappa_pv_s, morph_mesh.kappa_pf_s);
 
-        // Write target obj (restored to original (pre-scale) coordinates)
-        auto V_targ = V;
-        V_targ *= 1.0 / globalScale;
-        std::string output_mesh_targ_path = out_dir + "patch_" + std::to_string(pd.idx) + "_targ.obj";
-        igl::writeOBJ(output_mesh_targ_path, V_targ, F);
+        // Mirror physical-unit target into morph_dir so {targ, inv} sit side-by-side.
+        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_targ.obj", V, F);
 
 
         VertexData<double> lambda_pv_s(mesh, morph_mesh.lambda_pv_s);
@@ -315,16 +313,20 @@ int main(int argc, char* argv[])
 
 
 
-        auto V_inv = Vr;
-        V_inv *= 1.0 / globalScale;
-        std::string output_mesh_inv_path = out_dir + "patch_" + std::to_string(pd.idx) + "_inv.obj";
-        igl::writeOBJ(output_mesh_inv_path, V_inv, F);
+        // Vr lives in the same physical frame as V; write as-is.
+        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_inv.obj", Vr, F);
 
         // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
+        // Writes two files:
+        //   patch_{i}_material.txt : face_id  t1  t2          (discrete grayscale)
+        //   patch_{i}_lamkap.txt   : face_id  lambda  kappa   (continuous SGN values)
         {
-            std::string mat_path = design_dir + "patch_" + std::to_string(pd.idx) + "_material.txt";
-            std::ofstream ofs(mat_path);
-            ofs << "# face_id  t1  t2\n";
+            const std::string mat_path = design_dir + "patch_" + std::to_string(pd.idx) + "_material.txt";
+            const std::string lk_path  = design_dir + "patch_" + std::to_string(pd.idx) + "_lamkap.txt";
+            std::ofstream mof(mat_path);
+            std::ofstream lof(lk_path);
+            mof << "# face_id  t1  t2\n";
+            lof << "# face_id  lambda  kappa\n";
             for (Face f : mesh.faces()) {
                 double sum = 0.0; int cnt = 0;
                 for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
@@ -333,9 +335,11 @@ int main(int argc, char* argv[])
                 int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
                 double t1 = ac.feasible_t_vals[idx].first;
                 double t2 = ac.feasible_t_vals[idx].second;
-                ofs << f.getIndex() << "  " << t1 << "  " << t2 << "\n";
+                mof << f.getIndex() << "  " << t1  << "  " << t2  << "\n";
+                lof << f.getIndex() << "  " << lam << "  " << kap << "\n";
             }
             spdlog::info("Patch {} material -> {}", pd.idx, mat_path);
+            spdlog::info("Patch {} lamkap   -> {}", pd.idx, lk_path);
         }
 
         spdlog::info("Patch {} done.", pd.idx);
