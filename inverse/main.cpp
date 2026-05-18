@@ -146,93 +146,115 @@ int main(int /*argc*/, char * /*argv*/[])
 
     auto Vr = V;
 
-    spdlog::info("Step 4: Inverse Design.");
+    spdlog::info("Step 4: Inverse Design (ADMM + Augmented Lagrangian).");
 
-    double wP_kap = config.RuntimeSetting.wP_kap;
-    double wP_lam = config.RuntimeSetting.wP_lam;
-    double penalty_threshold = config.RuntimeSetting.penalty_threshold;
-    double betaP = config.RuntimeSetting.betaP;
-    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
-    auto penalty_to_kapp = MaterialPenaltyFunctionPerV(geometry, ac.feasible_kapp, betaP);
+    const double wM_kap = config.RuntimeSetting.wM_kap;
+    const double wM_lam = config.RuntimeSetting.wM_lam;
+    const double wL_kap = config.RuntimeSetting.wL_kap;
+    const double wL_lam = config.RuntimeSetting.wL_lam;
 
-    int stage_iter = 5;
-    int k = 0;
+    // ADMM hyperparameters
+    double       rho            = config.RuntimeSetting.rho;
+    const double rho_max        = config.RuntimeSetting.rho_max;
+    const double rho_growth     = config.RuntimeSetting.rho_growth;
+    const double rho_ratio      = config.RuntimeSetting.rho_ratio;
+    const int    max_outer_iter = config.RuntimeSetting.max_outer_iter;
+    const double tol_primal     = config.RuntimeSetting.tol_primal;
+    const double tol_dual       = config.RuntimeSetting.tol_dual;
 
-    double wM_kap = config.RuntimeSetting.wM_kap;
-    double wM_lam = config.RuntimeSetting.wM_lam;
-    double wL_kap = config.RuntimeSetting.wL_kap;
-    double wL_lam = config.RuntimeSetting.wL_lam;
+    // ADMM state — per-face (z = discrete projection target, mu = Lagrange multiplier).
+    FaceData<double> z_lam(mesh, 0.0), z_kap(mesh, 0.0);
+    FaceData<double> mu_lam(mesh, 0.0), mu_kap(mesh, 0.0);
 
-#ifdef __Add_PENALTY__
+    // Helper: average per-vertex κ to per-face (1/3 sum).
+    auto avg_kap_pf = [&](Face f) {
+        double sum = 0.0; int cnt = 0;
+        for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
+        return sum / cnt;
+    };
 
-    double distance = 0.0;
-    double penalty_kap = 0.0;
-    double penalty_lam = 0.0;
-    while (k < stage_iter)
+    // Initial z = Proj_F( current (λ_pf, κ_pf_avg) )  — closest feasible per face.
+    for (Face f : mesh.faces()) {
+        double kap_f = avg_kap_pf(f);
+        double lam_f = lambda_pf_s[f];
+        int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap_f, lam_f);
+        z_lam[f] = ac.feasible_lamb[idx];
+        z_kap[f] = ac.feasible_kapp[idx];
+    }
+
+    for (int outer = 0; outer < max_outer_iter; ++outer)
     {
-        spdlog::info("Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
+        spdlog::info("ADMM iter {} start  (rho = {:.4f})", outer, rho);
+
+        // ---- Step 1a: θ-update, OptKap (κ_pv at face-level AL coupling) ----
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Vr = sparse_gauss_newton_FixLam_OptKap_AL(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s,
+            adjointFunc_OptKap, z_kap, mu_kap, rho, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+            wM_kap, wL_kap, E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        double dist_after_kap = (Vr - targetV).squaredNorm() / nV;
 
-        distance = (Vr - targetV).squaredNorm() / nV;
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
-        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-        spdlog::info("Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                     k, distance, penalty_kap, penalty_lam);
-
-        spdlog::info("Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", k, wP_kap, wP_lam);
+        // ---- Step 1b: θ-update, OptLam (λ_pf directly face-level) ----
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Vr = sparse_gauss_newton_FixKap_OptLam_AL(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s,
+            adjointFunc_OptLam, z_lam, mu_lam, rho, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+            wM_lam, wL_lam, E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        double dist_after_lam = (Vr - targetV).squaredNorm() / nV;
 
-        distance = (Vr - targetV).squaredNorm() / nV;
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pv_s.toVector(), true);
-        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-        spdlog::info("Stage {}, OptLam finish- Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                     k, distance, penalty_kap, penalty_lam);
+        // ---- Step 2: z-update.  z_f = Proj_F(θ_f + μ_f / ρ),per face,joint (λ, κ) ----
+        FaceData<double> z_lam_old = z_lam, z_kap_old = z_kap;
+        for (Face f : mesh.faces()) {
+            double kap_f = avg_kap_pf(f);
+            double lam_f = lambda_pf_s[f];
+            double kap_shifted = kap_f + mu_kap[f] / rho;
+            double lam_shifted = lam_f + mu_lam[f] / rho;
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap_shifted, lam_shifted);
+            z_lam[f] = ac.feasible_lamb[idx];
+            z_kap[f] = ac.feasible_kapp[idx];
+        }
 
-        k++;
-        if (penalty_kap >= penalty_threshold)
-            wP_kap *= 10;
-        if (penalty_lam >= penalty_threshold)
-            wP_lam *= 10;
-        if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+        // ---- Step 3: dual ascent  μ ← μ + ρ·(θ - z) ----
+        double primal_sq = 0.0, dual_sq = 0.0;
+        for (Face f : mesh.faces()) {
+            double kap_f = avg_kap_pf(f);
+            double lam_f = lambda_pf_s[f];
+            double r_lam = lam_f - z_lam[f];
+            double r_kap = kap_f - z_kap[f];
+            mu_lam[f] += rho * r_lam;
+            mu_kap[f] += rho * r_kap;
+            primal_sq += r_lam * r_lam + r_kap * r_kap;
+            double dz_lam = z_lam[f] - z_lam_old[f];
+            double dz_kap = z_kap[f] - z_kap_old[f];
+            dual_sq   += dz_lam * dz_lam + dz_kap * dz_kap;
+        }
+        const double r_primal = std::sqrt(primal_sq);
+        const double r_dual   = rho * std::sqrt(dual_sq);
+
+        // Projected distance: build a per-face (λ, κ) field from z and evaluate ||Vr - target|| on it
+        // (κ broadcast to vertices for use with simulationFunction in OptLam variant — diagnostic only).
+        double dist_proj = std::numeric_limits<double>::quiet_NaN();
+        spdlog::info("ADMM iter {} : dist_kap={:.6e}, dist_lam={:.6e}, r_primal={:.6e}, r_dual={:.6e}, rho={:.4f}",
+                     outer, dist_after_kap, dist_after_lam, r_primal, r_dual, rho);
+
+        // Early stop on primal & dual residual
+        if (r_primal < tol_primal && r_dual < tol_dual) {
+            spdlog::info("ADMM converged at outer iter {} (primal {:.3e}, dual {:.3e}).",
+                         outer, r_primal, r_dual);
             break;
+        }
 
-        // wM_kap *= 0.5;
-        // wL_kap *= 0.5;
-        // wM_lam *= 0.5;
-        // wL_lam *= 0.5;
+        // Adaptive ρ (Boyd 2011 §3.4.1)
+        if (r_primal > rho_ratio * r_dual && rho < rho_max) {
+            rho = std::min(rho_max, rho * rho_growth);
+            spdlog::info("  rho up -> {:.4f}", rho);
+        } else if (r_dual > rho_ratio * r_primal) {
+            rho = std::max(1e-6, rho / rho_growth);
+            spdlog::info("  rho down -> {:.4f}", rho);
+        }
     }
-
-#else
-
-    Vr = targetV;
-    while (k < stage_iter)
-    {
-        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, fixedIdx,
-                                               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
-                                               E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-
-        double distance_kap = (Vr - targetV).squaredNorm() / nV;
-        spdlog::info("Stage {}, OptKap finish - Distance: {:.6f}", k, distance_kap);
-
-        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, fixedIdx,
-                                               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
-                                               E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-
-        double distance_lam = (Vr - targetV).squaredNorm() / nV;
-        spdlog::info("Stage {}, OptLam finish - Distance: {:.6f}", k, distance_lam);
-
-        k++;
-    }
-
-#endif
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.

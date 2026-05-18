@@ -69,6 +69,16 @@ public:
         double wP_lam;
         double penalty_threshold;
         double betaP;
+
+        // ADMM / Augmented-Lagrangian parameters (see docs/grayscalemorph/inverse_admm_al.md).
+        // All optional in cfg.json — defaults applied if absent so non-AL binaries don't break.
+        double rho;             // initial AL coefficient
+        double rho_max;         // upper bound on adaptive ρ (avoid KKT condition blow-up)
+        double rho_growth;      // ρ-adapt factor (τ in Boyd §3.4.1)
+        double rho_ratio;       // primal/dual residual ratio threshold (η)
+        int    max_outer_iter;  // outer ADMM iterations cap
+        double tol_primal;      // ‖θ - z‖ stopping tolerance
+        double tol_dual;        // ρ·‖z - z_prev‖ stopping tolerance
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

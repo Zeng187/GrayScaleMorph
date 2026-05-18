@@ -89,6 +89,15 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wP_lam            = rt["wP_lam"][0];
     RuntimeSetting.penalty_threshold = rt["penalty_threshold"][0];
     RuntimeSetting.betaP             = rt["betaP"][0];
+
+    // ADMM / AL parameters — all optional so non-Inverse binaries don't fail.
+    RuntimeSetting.rho            = rt.value("rho",            json::array({1.0}))[0];
+    RuntimeSetting.rho_max        = rt.value("rho_max",        json::array({100.0}))[0];
+    RuntimeSetting.rho_growth     = rt.value("rho_growth",     json::array({2.0}))[0];
+    RuntimeSetting.rho_ratio      = rt.value("rho_ratio",      json::array({10.0}))[0];
+    RuntimeSetting.max_outer_iter = rt.value("max_outer_iter", json::array({20}))[0];
+    RuntimeSetting.tol_primal     = rt.value("tol_primal",     json::array({1e-3}))[0];
+    RuntimeSetting.tol_dual       = rt.value("tol_dual",       json::array({1e-3}))[0];
 }
 
 std::string Config::materialJsonPath() const

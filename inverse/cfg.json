@@ -20,6 +20,14 @@
 		"wP_kap": [ 0.1 ],
 		"wP_lam": [ 0.1 ],
 		"penalty_threshold": [ 0.01 ],
-		"betaP": [ 50 ]
+		"betaP": [ 50 ],
+
+		"rho":            [ 1.0 ],
+		"rho_max":        [ 100.0 ],
+		"rho_growth":     [ 2.0 ],
+		"rho_ratio":      [ 10.0 ],
+		"max_outer_iter": [ 20 ],
+		"tol_primal":     [ 1e-3 ],
+		"tol_dual":       [ 1e-3 ]
 	}
 }
