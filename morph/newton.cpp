@@ -1879,6 +1879,482 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
 
 
+// ===========================================================================
+// Augmented Lagrangian variants (ADMM θ-update step)
+//
+//   E_AL(θ; z, μ, ρ) =
+//       (x*-x_T)ᵀ M (x*-x_T)             ← distance D
+//     + wM · θᵀ M_θ θ                    ← mass regulariser (per-vertex or per-face)
+//     + wL · θᵀ L_θ θ                    ← Laplacian regulariser (vertex cotan or dual-face)
+//     + μᵀ (Aθ - z)                      ← Lagrangian coupling, face-level
+//     + (ρ/2) ||Aθ - z||²                ← augmentation, face-level
+//
+//   For κ: SGN variable is per-vertex (size nV).  A is the nF×nV averaging
+//          operator (A_{f,v}=1/3 if v∈f).  ATA appears in the KKT θ-block.
+//   For λ: SGN variable is per-face (size nF).  A ≡ I_nF (identity); we skip
+//          the averaging build and treat z, μ in the same nF-space as θ.
+// ===========================================================================
+
+namespace {
+
+// Build per-face κ averaging operator A (nF × nV), A_{f,v} = 1/3 if v ∈ f.
+Eigen::SparseMatrix<double>
+buildFaceAvgOperator(geometrycentral::surface::ManifoldSurfaceMesh& mesh,
+                     geometrycentral::surface::IntrinsicGeometryInterface& geometry)
+{
+  geometry.requireVertexIndices();
+  const int nV = static_cast<int>(mesh.nVertices());
+  const int nF = static_cast<int>(mesh.nFaces());
+  Eigen::SparseMatrix<double> A(nF, nV);
+  std::vector<Eigen::Triplet<double>> trips;
+  trips.reserve(3 * nF);
+  int fi = 0;
+  for(auto f : mesh.faces())
+  {
+    for(auto v : f.adjacentVertices())
+      trips.emplace_back(fi, static_cast<int>(geometry.vertexIndices[v]), 1.0 / 3.0);
+    ++fi;
+  }
+  A.setFromTriplets(trips.begin(), trips.end());
+  return A;
+}
+
+// Pack a FaceData<double> into an Eigen::VectorXd of size nF in face-index order.
+inline Eigen::VectorXd
+faceDataToVec(geometrycentral::surface::ManifoldSurfaceMesh& mesh,
+              const geometrycentral::surface::FaceData<double>& fd)
+{
+  Eigen::VectorXd v(mesh.nFaces());
+  int fi = 0;
+  for(auto f : mesh.faces()) { v(fi) = fd[f]; ++fi; }
+  return v;
+}
+
+} // anonymous namespace
+
+
+Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_AL(IntrinsicGeometryInterface& geometry,
+                                    const Eigen::MatrixXd& targetV,
+                                    const Eigen::MatrixXd& initV,
+                                    const FaceData<Eigen::Matrix2d>& MrInv,
+                                    FaceData<double>& theta1,
+                                    VertexData<double>& theta2,
+                                    const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+                                    const FaceData<double>& z_kap,
+                                    const FaceData<double>& mu_kap,
+                                    double rho,
+                                    const std::vector<int>& fixedIdx,
+                                    int max_iters,
+                                    double lim,
+                                    double wM,
+                                    double wL,
+                                    double E,
+                                    double nu,
+                                    double h,
+                                    double w_s,
+                                    double w_b,
+                                    const std::vector<int>& ref_faces,
+                                    const std::function<void(const Eigen::VectorXd&)>& callback)
+{
+  geometry.requireCotanLaplacian();
+  geometry.requireVertexLumpedMassMatrix();
+  geometry.requireFaceAreas();
+  geometry.requireVertexIndices();
+
+  auto& mesh = dynamic_cast<ManifoldSurfaceMesh&>(geometry.mesh);
+
+  // -- distance metric mass on x (per-vertex 3D, same as _Penalty version)
+  Eigen::VectorXd masses = Eigen::VectorXd::Zero(targetV.size());
+  double totalArea = 0;
+  for(Face f: mesh.faces())
+  {
+    for(Vertex v: f.adjacentVertices())
+    {
+      masses(3 * geometry.vertexIndices[v]) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 1) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 2) += geometry.faceAreas[f] / 3.;
+    }
+    totalArea += geometry.faceAreas[f];
+  }
+  masses /= totalArea;
+
+  Eigen::SparseMatrix<double> L = geometry.cotanLaplacian;          // vertex cotan, |V|×|V|
+
+  Eigen::SparseMatrix<double> M_theta(targetV.rows(), targetV.rows());
+  M_theta.reserve(targetV.rows());
+  for(int i = 0; i < targetV.rows(); ++i)
+    M_theta.insert(i, i) = totalArea * masses(3 * i);
+
+  // -- averaging operator A (nF × nV) for AL face-level coupling on per-vertex κ
+  const Eigen::SparseMatrix<double> A_avg = buildFaceAvgOperator(mesh, geometry);
+  const Eigen::SparseMatrix<double> AtA   = A_avg.transpose() * A_avg;
+  const Eigen::VectorXd z_vec  = faceDataToVec(mesh, z_kap);        // size nF
+  const Eigen::VectorXd mu_vec = faceDataToVec(mesh, mu_kap);       // size nF
+
+  Eigen::VectorXd theta = theta2.toVector();
+  Eigen::VectorXd xTarget(targetV.size());
+  for(int i = 0; i < targetV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      xTarget(3 * i + j) = targetV(i, j);
+  Eigen::VectorXd x(initV.size());
+  for(int i = 0; i < initV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      x(3 * i + j) = initV(i, j);
+
+  LLTSolver adjointSolver;
+
+  auto distance = [&](const Eigen::VectorXd& th) {
+    theta2.fromVector(th);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
+    newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
+
+    // AL term on face-level κ: residual r = A·θ - z (size nF)
+    Eigen::VectorXd r = A_avg * th - z_vec;
+    double al = mu_vec.dot(r) + 0.5 * rho * r.squaredNorm();
+
+    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+         + wM * th.dot(M_theta * th)
+         + wL * th.dot(L * th)
+         + al;
+  };
+
+  Eigen::SparseMatrix<double> P = projectionMatrix(fixedIdx, x.size());
+  Eigen::VectorXd X(targetV.size() + theta.size());
+  X.head(targetV.size()) = x;
+  X.tail(theta.size())   = theta;
+  Eigen::SparseMatrix<double> H = adjointFunc.eval_hessian(X);
+
+  // AL contribution to the θ-block: ρ·AtA (constant; build once).
+  // KKT θ-block = 2·wM·M_theta + 2·wL·L + ρ·AtA  (factor of 2 on quadratic
+  //              regularisers as in _Penalty; AL coefficient ρ/2 -> Hessian ρ)
+  Eigen::SparseMatrix<double> HGN = buildHGN(2 * masses, P,
+                                             2 * wM * M_theta + 2 * wL * L + rho * AtA,
+                                             H);
+
+  auto distanceGrad = [&](const Eigen::VectorXd& th) -> Eigen::VectorXd {
+    Eigen::VectorXd X(targetV.size() + th.size());
+    X.head(targetV.size()) = x;
+    X.tail(th.size())      = th;
+    H = adjointFunc.eval_hessian(X);
+
+    for(int j = 0; j < targetV.size(); ++j)
+      H.coeffRef(j, j) += 1e-10;
+
+    Eigen::SparseMatrix<double> A_block =
+        (P * H.block(0, 0, targetV.size(), targetV.size()) * P.transpose()).eval();
+
+    adjointSolver.factorize(A_block);
+    if(adjointSolver.info() != Eigen::Success)
+    {
+      auto [f, g, A_proj] = adjointFunc.eval_with_hessian_proj(X);
+      A_proj = (P * A_proj.block(0, 0, targetV.size(), targetV.size()) * P.transpose()).eval();
+      A_block = 0.9 * A_block + 0.1 * A_proj;
+      adjointSolver.factorize(A_block);
+      if(adjointSolver.info() != Eigen::Success)
+        adjointSolver.factorize(A_proj);
+    }
+
+    Eigen::VectorXd b   = P * masses.cwiseProduct(x - xTarget);
+    Eigen::VectorXd dir = adjointSolver.solve(b);
+    dir = P.transpose() * dir;
+
+    // AL gradient on κ_pv: Aᵀ μ + ρ · Aᵀ (A·θ - z)
+    Eigen::VectorXd al_grad = A_avg.transpose() * (mu_vec + rho * (A_avg * th - z_vec));
+
+    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
+         + 2 * wM * M_theta * th
+         + 2 * wL * L * th
+         + al_grad;
+  };
+
+  double energy = distance(theta);
+  std::cout << "Initial SPN(AL) energy: " << energy
+            << "\t distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << std::endl;
+
+  LUSolver solver;
+
+  for(int i = 0; i < max_iters; ++i)
+  {
+    double f = distance(theta);
+    Eigen::VectorXd g = distanceGrad(theta);
+
+    Eigen::VectorXd b(2 * x.size() - 2 * fixedIdx.size() + theta.size());
+    b.setZero();
+    b.segment(x.size() - fixedIdx.size(), theta.size()) = -g;
+
+    // HGN θ-block is constant across iters (ρ·AtA doesn't depend on θ)
+    if(i == 0)
+      solver.compute(HGN);
+    // (no factorize() in subsequent iters: same KKT)
+
+    if(solver.info() != Eigen::Success)
+    {
+      std::cout << "Solver error\n";
+      return targetV;
+    }
+
+    Eigen::VectorXd d = solver.solve(b);
+    Eigen::VectorXd deltaTheta = d.segment(x.size() - fixedIdx.size(), theta.size());
+    Eigen::VectorXd deltaX     = d.segment(0, x.size() - fixedIdx.size());
+    deltaX = P.transpose() * deltaX;
+
+    Eigen::VectorXd x_old = x;
+    double s = lineSearch(theta, deltaTheta, f, g, distance,
+                          [&](double s) { x = x_old + s * deltaX; });
+    if(s < 0)
+    {
+      x = x_old;
+      std::cout << "Line search failed (x reverted)\n";
+      break;
+    }
+    theta += s * deltaTheta;
+
+    std::cout << "Decrement in iteration " << i << ": "
+              << TinyAD::newton_decrement(deltaTheta, g)
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
+    if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
+      break;
+
+    callback(x);
+  }
+
+  // Final equilibrium-honest exit
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN(AL) energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
+
+  Eigen::MatrixXd V(targetV.rows(), 3);
+  for(int i = 0; i < targetV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      V(i, j) = x(3 * i + j);
+
+  theta2.fromVector(theta);
+  return V;
+}
+
+
+Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_AL(IntrinsicGeometryInterface& geometry,
+                                    const Eigen::MatrixXd& targetV,
+                                    const Eigen::MatrixXd& initV,
+                                    const FaceData<Eigen::Matrix2d>& MrInv,
+                                    FaceData<double>& theta1,            // lambda_pf optimised
+                                    VertexData<double>& theta2,          // kappa_pv fixed
+                                    const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+                                    const FaceData<double>& z_lam,
+                                    const FaceData<double>& mu_lam,
+                                    double rho,
+                                    const std::vector<int>& fixedIdx,
+                                    int max_iters,
+                                    double lim,
+                                    double wM,
+                                    double wL,
+                                    double E,
+                                    double nu,
+                                    double h,
+                                    double w_s,
+                                    double w_b,
+                                    const std::vector<int>& ref_faces,
+                                    const std::function<void(const Eigen::VectorXd&)>& callback)
+{
+  geometry.requireFaceAreas();
+  geometry.requireVertexIndices();
+
+  auto& mesh = dynamic_cast<ManifoldSurfaceMesh&>(geometry.mesh);
+
+  // distance metric mass on x (per-vertex 3D)
+  Eigen::VectorXd masses = Eigen::VectorXd::Zero(targetV.size());
+  double totalArea = 0;
+  for(Face f : mesh.faces())
+  {
+    for(Vertex v : f.adjacentVertices())
+    {
+      masses(3 * geometry.vertexIndices[v] + 0) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 1) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 2) += geometry.faceAreas[f] / 3.;
+    }
+    totalArea += geometry.faceAreas[f];
+  }
+  masses /= totalArea;
+
+  const int nF = static_cast<int>(mesh.nFaces());
+
+  // face area mass matrix M_θ
+  Eigen::SparseMatrix<double> M_theta(nF, nF);
+  M_theta.reserve(nF);
+  {
+    int iF = 0;
+    for(Face f : mesh.faces()) { M_theta.insert(iF, iF) = geometry.faceAreas[f]; ++iF; }
+  }
+
+  // Uniform dual-graph face Laplacian (same construction as _Penalty variant)
+  Eigen::SparseMatrix<double> L_theta(nF, nF);
+  {
+    FaceData<int> faceIdx(mesh);
+    int cnt = 0;
+    for(Face f : mesh.faces()) faceIdx[f] = cnt++;
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(mesh.nEdges() * 4);
+    std::vector<double> diag(nF, 0.0);
+    for(Edge e : mesh.edges())
+    {
+      if(e.isBoundary()) continue;
+      Halfedge he = e.halfedge();
+      int i = faceIdx[he.face()];
+      int j = faceIdx[he.twin().face()];
+      const double w = 1.0;
+      trips.emplace_back(i, j, -w);
+      trips.emplace_back(j, i, -w);
+      diag[i] += w;
+      diag[j] += w;
+    }
+    for(int i = 0; i < nF; ++i) trips.emplace_back(i, i, diag[i]);
+    L_theta.setFromTriplets(trips.begin(), trips.end());
+  }
+
+  // AL face-level z, μ — θ here is already nF-vector, so A ≡ I (no averaging).
+  const Eigen::VectorXd z_vec  = faceDataToVec(mesh, z_lam);
+  const Eigen::VectorXd mu_vec = faceDataToVec(mesh, mu_lam);
+
+  Eigen::VectorXd theta = theta1.toVector();
+  Eigen::VectorXd xTarget(targetV.size());
+  for(int i = 0; i < targetV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      xTarget(3 * i + j) = targetV(i, j);
+  Eigen::VectorXd x(initV.size());
+  for(int i = 0; i < initV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      x(3 * i + j) = initV(i, j);
+
+  LLTSolver adjointSolver;
+
+  auto distance = [&](const Eigen::VectorXd& th) {
+    theta1.fromVector(th);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
+    newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
+
+    Eigen::VectorXd r = th - z_vec;
+    double al = mu_vec.dot(r) + 0.5 * rho * r.squaredNorm();
+
+    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+         + wM * th.dot(M_theta * th)
+         + wL * th.dot(L_theta * th)
+         + al;
+  };
+
+  Eigen::SparseMatrix<double> P = projectionMatrix(fixedIdx, x.size());
+  Eigen::VectorXd X(targetV.size() + theta.size());
+  X.head(targetV.size()) = x;
+  X.tail(theta.size())   = theta;
+  Eigen::SparseMatrix<double> H = adjointFunc.eval_hessian(X);
+
+  // Identity contribution from AL Hessian on per-face θ
+  Eigen::SparseMatrix<double> I_nF(nF, nF); I_nF.setIdentity();
+  Eigen::SparseMatrix<double> HGN = buildHGN(2 * masses, P,
+                                             2 * wM * M_theta + 2 * wL * L_theta + rho * I_nF,
+                                             H);
+
+  auto distanceGrad = [&](const Eigen::VectorXd& th) -> Eigen::VectorXd {
+    Eigen::VectorXd X(targetV.size() + th.size());
+    X.head(targetV.size()) = x;
+    X.tail(th.size())      = th;
+    H = adjointFunc.eval_hessian(X);
+
+    for(int j = 0; j < targetV.size(); ++j)
+      H.coeffRef(j, j) += 1e-10;
+
+    Eigen::SparseMatrix<double> A_block =
+        (P * H.block(0, 0, targetV.size(), targetV.size()) * P.transpose()).eval();
+    adjointSolver.factorize(A_block);
+    if(adjointSolver.info() != Eigen::Success)
+    {
+      auto [f, g, A_proj] = adjointFunc.eval_with_hessian_proj(X);
+      A_proj = (P * A_proj.block(0, 0, targetV.size(), targetV.size()) * P.transpose()).eval();
+      A_block = 0.9 * A_block + 0.1 * A_proj;
+      adjointSolver.factorize(A_block);
+      if(adjointSolver.info() != Eigen::Success)
+        adjointSolver.factorize(A_proj);
+    }
+    Eigen::VectorXd b   = P * masses.cwiseProduct(x - xTarget);
+    Eigen::VectorXd dir = adjointSolver.solve(b);
+    dir = P.transpose() * dir;
+
+    Eigen::VectorXd al_grad = mu_vec + rho * (th - z_vec);
+
+    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
+         + 2 * wM * M_theta * th
+         + 2 * wL * L_theta * th
+         + al_grad;
+  };
+
+  double energy = distance(theta);
+  std::cout << "Initial SPN(AL) energy: " << energy
+            << "\t distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << std::endl;
+
+  LUSolver solver;
+
+  for(int i = 0; i < max_iters; ++i)
+  {
+    double f = distance(theta);
+    Eigen::VectorXd g = distanceGrad(theta);
+
+    Eigen::VectorXd b(2 * x.size() - 2 * fixedIdx.size() + theta.size());
+    b.setZero();
+    b.segment(x.size() - fixedIdx.size(), theta.size()) = -g;
+
+    if(i == 0)
+      solver.compute(HGN);
+
+    if(solver.info() != Eigen::Success)
+    {
+      std::cout << "Solver error\n";
+      return targetV;
+    }
+
+    Eigen::VectorXd d = solver.solve(b);
+    Eigen::VectorXd deltaTheta = d.segment(x.size() - fixedIdx.size(), theta.size());
+    Eigen::VectorXd deltaX     = d.segment(0, x.size() - fixedIdx.size());
+    deltaX = P.transpose() * deltaX;
+
+    Eigen::VectorXd x_old = x;
+    double s = lineSearch(theta, deltaTheta, f, g, distance,
+                          [&](double s) { x = x_old + s * deltaX; });
+    if(s < 0)
+    {
+      x = x_old;
+      std::cout << "Line search failed (x reverted)\n";
+      break;
+    }
+    theta += s * deltaTheta;
+
+    std::cout << "Decrement in iteration " << i << ": "
+              << TinyAD::newton_decrement(deltaTheta, g)
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
+    if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
+      break;
+
+    callback(x);
+  }
+
+  const double final_energy = distance(theta);
+  std::cout << "Final SPN(AL) energy: " << final_energy
+            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\n";
+
+  Eigen::MatrixXd V(targetV.rows(), 3);
+  for(int i = 0; i < targetV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      V(i, j) = x(3 * i + j);
+
+  theta1.fromVector(theta);
+  return V;
+}
+
+
 Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
                                     const Eigen::MatrixXd& targetV,
                                     const FaceData<Eigen::Matrix2d>& MrInv,

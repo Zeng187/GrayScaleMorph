@@ -211,6 +211,68 @@ const std::vector<int>& ref_faces,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
+// ---------------------------------------------------------------------------
+// Augmented-Lagrangian variants (ADMM θ-update step)
+//
+// AL energy in face-level form:
+//   E_AL(θ; z, μ, ρ) = D(x*(θ); θ) + wM·θᵀMθ + wL·θᵀLθ + μᵀ(θ_face - z) + ρ/2·||θ_face - z||²
+//
+// where θ_face = A·θ_pv for κ (averaging operator A: nF×nV, A_{f,v}=1/3 if v∈f).
+// For λ the variable is already face-level so θ_face ≡ θ.
+//
+// The caller owns z, μ; AL builds A internally for the per-vertex κ case.
+// ---------------------------------------------------------------------------
+
+Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_AL(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXd& targetV,
+const Eigen::MatrixXd& initV,
+const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+geometrycentral::surface::FaceData<double>& theta1,            // lambda_pf (fixed)
+geometrycentral::surface::VertexData<double>& theta2,          // kappa_pv (optimised)
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const geometrycentral::surface::FaceData<double>& z_kap,       // discrete projection target, per-face
+const geometrycentral::surface::FaceData<double>& mu_kap,      // dual variable, per-face
+double rho,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM,
+double wL,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::vector<int>& ref_faces,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+
+
+Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_AL(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXd& targetV,
+const Eigen::MatrixXd& initV,
+const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+geometrycentral::surface::FaceData<double>& theta1,            // lambda_pf (optimised, face-level)
+geometrycentral::surface::VertexData<double>& theta2,          // kappa_pv (fixed)
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const geometrycentral::surface::FaceData<double>& z_lam,       // discrete projection target, per-face
+const geometrycentral::surface::FaceData<double>& mu_lam,      // dual variable, per-face
+double rho,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM,
+double wL,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::vector<int>& ref_faces,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+
+
 Eigen::MatrixXd sparse_gauss_newton_lay1(
 geometrycentral::surface::IntrinsicGeometryInterface& geometry,
 const Eigen::MatrixXd& targetV,
