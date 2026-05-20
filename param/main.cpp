@@ -104,8 +104,8 @@ int main(int /*argc*/, char* /*argv*/[])
         const auto post = computeLambdaStats(V_scaled, F, P_scaled);
         spdlog::info("Lambda post-shift: [{:.4f}, {:.4f}], mean {:.4f}",
                      post.lmin, post.lmax, post.lmean);
-        spdlog::info("Material window  : [{:.4f}, {:.4f}]",
-                     ac.range_lam.x, ac.range_lam.y);
+        spdlog::info("Material window  : [{:.4f}, {:.4f}], size {:.4f}",
+                     ac.range_lam.x, ac.range_lam.y, ac.range_lam.y - ac.range_lam.x);
     }
 
     // Embed P (2D) as 3D with z=0 for OBJ I/O

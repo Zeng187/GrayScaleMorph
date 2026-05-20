@@ -136,6 +136,8 @@ int main(int /*argc*/, char* /*argv*/[])
             const auto post = computeLambdaStats(V_scaled, pd.F, P_scaled);
             spdlog::info("Patch {} lambda post-shift: [{:.4f}, {:.4f}], mean {:.4f}",
                          pd.idx, post.lmin, post.lmax, post.lmean);
+            spdlog::info("Patch {} material window  : [{:.4f}, {:.4f}], size {:.4f}",
+                         pd.idx, ac.range_lam.x, ac.range_lam.y, ac.range_lam.y - ac.range_lam.x);
         }
 
         // Embed P (2D) as 3D with z=0 so we can use the OBJ writer
