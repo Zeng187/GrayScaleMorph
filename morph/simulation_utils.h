@@ -4,6 +4,13 @@
 #include <algorithm>
 #include <cmath>
 
+namespace geometrycentral { namespace surface { class IntrinsicGeometryInterface; } }
+
+/// Build the lumped vertex mass vector used by SGN distance metric
+/// (size = 3 * nV, repeated triple per vertex, normalised by total area).
+/// geometry must own a mesh; requireFaceAreas / requireVertexIndices are called.
+Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry);
+
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size);
 
 Eigen::SparseMatrix<double> buildHGN(const Eigen::VectorXd& masses,

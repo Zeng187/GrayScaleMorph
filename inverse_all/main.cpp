@@ -191,6 +191,10 @@ int main(int argc, char* argv[])
         // V_init: flat plate aligned so fixed vertices match V exactly.
         Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
 
+        // Lumped vertex mass vector (size 3*nV) -- shared by all SGN calls so
+        // distance/SPN values match between main and the solver exactly.
+        const Eigen::VectorXd masses = computeVertexMasses(geometry);
+
         spdlog::info("Step 4: Inverse Design.");
 
         double wP_kap = config.RuntimeSetting.wP_kap;
@@ -212,35 +216,36 @@ int main(int argc, char* argv[])
 #ifdef __Add_PENALTY__
 
         double distance = 0.0;
+        double spn_energy = 0.0;
         double penalty_kap = 0.0;
         double penalty_lam = 0.0;
         while(k < stage_iter)
         {
             spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
+            Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
+                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                distance, spn_energy);
 
-            distance = (Vr - targetV).squaredNorm() / nV;
             penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, penalty_kap, penalty_lam);
+            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
+                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
 
 
 
             spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
+            Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
+                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                distance, spn_energy);
 
-            distance = (Vr - targetV).squaredNorm() / nV;
             penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptLam finish- Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, penalty_kap, penalty_lam);
+            spdlog::info("Patch {} Stage {}, OptLam finish- Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
+                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
 
             // Evaluate distance after jointly projecting kappa and lambda to the same feasible index
             {
@@ -281,27 +286,29 @@ int main(int argc, char* argv[])
 #else
 
         Vr = targetV;
+        double distance_kap = 0.0, spn_kap = 0.0;
+        double distance_lam = 0.0, spn_lam = 0.0;
         while(k < stage_iter)
         {
             spdlog::info("Patch {} Stage {}, OptKap start", pd.idx, k);
 
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptKap, fixedIdx,
+            Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptKap, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
+                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                distance_kap, spn_kap);
 
-            double distance_kap = (Vr - targetV).squaredNorm() / nV;
-            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}", pd.idx, k, distance_kap);
+            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, SPN energy: {:.6f}", pd.idx, k, distance_kap, spn_kap);
 
 
             spdlog::info("Patch {} Stage {}, OptLam start", pd.idx, k);
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptLam, fixedIdx,
+            Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptLam, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
+                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                distance_lam, spn_lam);
 
-            double distance_lam = (Vr - targetV).squaredNorm() / nV;
-            spdlog::info("Patch {} Stage {}, OptLam finish - Distance: {:.6f}", pd.idx, k, distance_lam);
+            spdlog::info("Patch {} Stage {}, OptLam finish - Distance: {:.6f}, SPN energy: {:.6f}", pd.idx, k, distance_lam, spn_lam);
 
 
             k++;

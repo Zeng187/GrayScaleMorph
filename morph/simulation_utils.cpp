@@ -5,6 +5,33 @@
 #include <igl/slice.h>
 #include <igl/slice_into.h>
 #include<igl/boundary_loop.h>
+#include <geometrycentral/surface/intrinsic_geometry_interface.h>
+#include <geometrycentral/surface/surface_mesh.h>
+
+Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry)
+{
+  using namespace geometrycentral::surface;
+  geometry.requireFaceAreas();
+  geometry.requireVertexIndices();
+
+  SurfaceMesh& mesh = geometry.mesh;
+  const int nV = static_cast<int>(mesh.nVertices());
+  Eigen::VectorXd masses = Eigen::VectorXd::Zero(3 * nV);
+
+  double totalArea = 0;
+  for(Face f : mesh.faces())
+  {
+    for(Vertex v : f.adjacentVertices())
+    {
+      masses(3 * geometry.vertexIndices[v]    ) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 1) += geometry.faceAreas[f] / 3.;
+      masses(3 * geometry.vertexIndices[v] + 2) += geometry.faceAreas[f] / 3.;
+    }
+    totalArea += geometry.faceAreas[f];
+  }
+  masses /= totalArea;
+  return masses;
+}
 
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size)
 {
