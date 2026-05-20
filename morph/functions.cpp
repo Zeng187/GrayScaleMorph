@@ -1581,8 +1581,14 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
         Eigen::Index f_idx = element.handle;
         T theta = element.variables(f_idx)(0);
 
-        // soft-min / min-distance-to-feasible set
-        T r = T(1e6);
+        // Hard min-distance² penalty (per-face, averaged): the argmin selects
+        // the nearest feasible value as a value-only comparison, while TinyAD
+        // tracks autodiff only through the surviving (theta - cand)² branch.
+        // Result:
+        //   gradient = (2·beta/nF) · (theta - nearest_candidate)
+        // strictly points toward the projection target, no soft-mixing of
+        // neighbouring candidates and no saturation at distance.
+        T r = T(1e30);
         for (int j = 0; j < feasible_cnt; ++j)
         {
           T theta_j = T(feasible_vals[j]);
@@ -1591,11 +1597,7 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
           if (sqdiff < r)
             r = sqdiff;
         }
-
-        r = exp(-T(beta) * r);
-
-        // average over faces
-        return -log(r + T(1e-12)) / T(nF);
+        return T(beta) * r / T(nF);
       });
 
   return func;
