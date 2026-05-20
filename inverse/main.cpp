@@ -372,9 +372,9 @@ int main(int /*argc*/, char * /*argv*/[])
 
         k++;
         if (penalty_kap >= penalty_threshold)
-            wP_kap *= 10;
+            wP_kap *= 2;
         if (penalty_lam >= penalty_threshold)
-            wP_lam *= 10;
+            wP_lam *= 2;
             
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;
