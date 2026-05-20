@@ -69,6 +69,7 @@ public:
         double wP_lam;
         double penalty_threshold;
         double betaP;
+        bool   snap_before_P;  // hard-snap (lambda, kappa) to nearest feasible before each P-update
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

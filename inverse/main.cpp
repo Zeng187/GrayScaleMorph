@@ -307,18 +307,27 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
         // ---- Joint snap to feasible material BEFORE P-update --------------
-        // The continuous (lambda, kappa) SGN solution will never be the
-        // actually-manufactured design; the final design is the snapped one.
-        // Aligning P with the snapped (lambda, kappa) is therefore more
-        // honest and avoids the "P fits continuous but proj_dist measures
-        // snapped" mismatch.  Effect: each stage becomes a proximal step
-        // (continuous SGN -> hard snap -> P-update).
-        for (Face f : mesh.faces())
+        // Controlled by cfg.json -> RuntimeSettings.snap_before_P (default false).
+        //
+        // When ON: continuous (lambda, kappa) is hard-snapped to the nearest
+        // feasible material pair before the P-update.  Each stage becomes a
+        // proximal step (continuous SGN -> hard snap -> P-update), so P is
+        // aligned with the actually-manufactured (discrete) design.
+        // After OptP finish, `Distance` (continuous) equals `Projected
+        // distance` (snap-then-forward).
+        //
+        // When OFF: P-update operates on the continuous SGN result.  Useful
+        // for debugging / comparing the "soft homotopy + ARAP" flow against
+        // the proximal flow.
+        if (config.RuntimeSetting.snap_before_P)
         {
-            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
-                                        kappa_pf_s[f], lambda_pf_s[f]);
-            lambda_pf_s[f] = ac.feasible_lamb[idx];
-            kappa_pf_s[f]  = ac.feasible_kapp[idx];
+            for (Face f : mesh.faces())
+            {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                lambda_pf_s[f] = ac.feasible_lamb[idx];
+                kappa_pf_s[f]  = ac.feasible_kapp[idx];
+            }
         }
 
         // ---- Lambda-aware ARAP P-update -----------------------------------
@@ -366,8 +375,9 @@ int main(int /*argc*/, char * /*argv*/[])
             wP_kap *= 10;
         if (penalty_lam >= penalty_threshold)
             wP_lam *= 10;
-        if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
-            break;
+            
+        // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+        //     break;
 
         wM_kap *= 0.5;
         wL_kap *= 0.5;

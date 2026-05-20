@@ -89,6 +89,7 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wP_lam            = rt["wP_lam"][0];
     RuntimeSetting.penalty_threshold = rt["penalty_threshold"][0];
     RuntimeSetting.betaP             = rt["betaP"][0];
+    RuntimeSetting.snap_before_P     = rt.value("snap_before_P", nlohmann::json::array({false}))[0];
 }
 
 std::string Config::materialJsonPath() const
