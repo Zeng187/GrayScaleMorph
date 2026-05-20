@@ -17,8 +17,8 @@
 		"wL_lam": [ 0.01 ],
 		"w_s": [ 1 ],
 		"w_b": [ 1 ],
-		"wP_kap": [ 0.1 ],
-		"wP_lam": [ 0.1 ],
+		"wP_kap": [ 0.0 ],
+		"wP_lam": [ 0.0 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 50 ]
 	}
