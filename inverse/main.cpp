@@ -398,6 +398,43 @@ int main(int /*argc*/, char * /*argv*/[])
     // frame, so write it out as-is — no inverse rescaling.
     igl::writeOBJ(morph_dir + "patch_0_inv.obj", Vr, F);
 
+    // ---- Final projected forward sim (manufacturing reality) ----------------
+    // Snap (lambda, kappa) per face to the nearest feasible (t1, t2) pair,
+    // run forward Newton on the snapped material, then write out the
+    // resulting mesh as patch_0_proj.obj — this is what the device will
+    // actually produce.  Also report the final manufacturing distance
+    // prominently in the log.
+    double final_proj_dist = 0.0;
+    {
+        FaceData<double> kappa_pf_proj(mesh);
+        FaceData<double> lambda_pf_proj(mesh);
+        for (Face f : mesh.faces())
+        {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+            lambda_pf_proj[f] = ac.feasible_lamb[idx];
+        }
+        auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                                               E, nu, ac.thickness,
+                                               config.RuntimeSetting.w_s,
+                                               config.RuntimeSetting.w_b, ref_faces);
+        Eigen::MatrixXd Vr_proj = Vr;
+        newton(geometry, Vr_proj, simFunc_proj,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                double d = Vr_proj(i, j) - targetV(i, j);
+                final_proj_dist += masses(3 * i + j) * d * d;
+            }
+
+        const std::string proj_path = morph_dir + "patch_0_proj.obj";
+        igl::writeOBJ(proj_path, Vr_proj, F);
+        spdlog::info("Proj mesh -> {}", proj_path);
+    }
+
     // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
     // Writes two files:
     //   patch_0_material.txt  : face_id  t1  t2           (discrete grayscale doses)
@@ -422,6 +459,14 @@ int main(int /*argc*/, char * /*argv*/[])
         spdlog::info("Material -> {}", mat_path);
         spdlog::info("LamKap   -> {}", lk_path);
     }
+
+    // ---- Highlight: final manufacturing distance ----
+    std::cout << "\n";
+    std::cout << "==========================================================\n";
+    std::cout << "  FINAL Projected distance (manufactured design):  "
+              << final_proj_dist << "\n";
+    std::cout << "==========================================================\n";
+    std::cout << "\n";
 
     spdlog::info("Inverse (single mesh): done.  Output -> {}", morph_dir);
     return 0;
