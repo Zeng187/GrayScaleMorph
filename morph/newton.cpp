@@ -257,7 +257,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy<<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy<<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -312,7 +312,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -323,7 +323,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -462,7 +462,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -517,7 +517,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -528,7 +528,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -717,7 +717,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
   };
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))<< std::endl;
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()<< std::endl;
 
   LUSolver solver;
 
@@ -773,7 +773,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
@@ -791,7 +791,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
   // physically honest.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -929,7 +929,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -984,7 +984,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -995,7 +995,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -1132,7 +1132,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -1188,7 +1188,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1199,7 +1199,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -1365,7 +1365,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -1421,7 +1421,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1432,7 +1432,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -1571,7 +1571,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()
             << std::endl;
 
   LUSolver solver;
@@ -1627,7 +1627,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1638,7 +1638,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   // Force final forward-sim convergence — see other variants for rationale.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -1841,7 +1841,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   };
 
   double energy = distance(theta);
-  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).dot(masses.cwiseProduct(x - xTarget))<< std::endl;
+  std::cout << "Initial SPN energy: " << energy << " " << energy <<"\t distance: "<<(x - xTarget).squaredNorm() / targetV.rows()<< std::endl;
 
   LUSolver solver;
 
@@ -1902,7 +1902,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
@@ -1920,7 +1920,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   // physically honest.
   const double final_energy = distance(theta);
   std::cout << "Final SPN energy: " << final_energy
-            << "\t x-distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+            << "\t Distance: " << (x - xTarget).squaredNorm() / targetV.rows()
             << "\n";
 
   Eigen::MatrixXd V(targetV.rows(), 3);
@@ -2115,7 +2115,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -2316,7 +2316,7 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tDistance: " << (x - xTarget).squaredNorm() / targetV.rows()
               << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
