@@ -22,6 +22,7 @@
 #include <string>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
@@ -176,7 +177,7 @@ int main(int /*argc*/, char * /*argv*/[])
     auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
     auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
 
-    int stage_iter = 5;
+    const int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;
 
     // MGDA also drops wM/wL stage decay: regulariser weights are stage-constant
@@ -237,6 +238,28 @@ int main(int /*argc*/, char * /*argv*/[])
         return d2;
     };
 
+    // Re-run forward Newton on the current (P, lambda, kappa) state and
+    // recompute mass-weighted distance.  Updates Vr in place so the next
+    // SGN call starts from the new equilibrium.  Called after the P-update
+    // where MrInv changed and Vr is no longer in equilibrium.
+    auto recomputeForwardState = [&]() -> double
+    {
+        auto simFunc = simulationFunction(geometry, MrInv, lambda_pf_s, kappa_pf_s,
+                                          E, nu, ac.thickness,
+                                          config.RuntimeSetting.w_s,
+                                          config.RuntimeSetting.w_b, ref_faces);
+        newton(geometry, Vr, simFunc,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        double d2 = 0.0;
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                double d = Vr(i, j) - targetV(i, j);
+                d2 += masses(3 * i + j) * d * d;
+            }
+        return d2;
+    };
+
     // MGDA stats: SPN energy / distance / projected dist / penalties / Pareto norms.
     auto printStageStats = [&]()
     {
@@ -256,7 +279,21 @@ int main(int /*argc*/, char * /*argv*/[])
     };
 
     // ARAP P-update lambda (reused by warm-up and MGDA stages).
+    // Optionally snaps (lambda, kappa) to nearest feasible (t1, t2) pair
+    // before fitting P, so the parameterisation aligns with the actually-
+    // manufactured material assignment instead of the continuous SGN
+    // intermediate.  After P/MrInv refresh, runs forward Newton to pull
+    // Vr back to equilibrium and refreshes reg accumulators + spn_energy,
+    // then prints a unified stage stats line.
     auto runArapPUpdate = [&](const std::string& tag) {
+        if (config.RuntimeSetting.snap_before_P) {
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                kappa_pf_s[f]  = ac.feasible_kapp[idx];
+                lambda_pf_s[f] = ac.feasible_lamb[idx];
+            }
+        }
         Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
         Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
         Eigen::MatrixX2d P_2d = P;
@@ -268,9 +305,18 @@ int main(int /*argc*/, char * /*argv*/[])
         igl::writeOBJ(morph_dir + "patch_0_P_" + tag + ".obj", P_obj, F);
         MrInv = precomputeMrInv(mesh, P, F);
         M_kappa = computeFaceMassKappa(mesh, MrInv);
-        std::cout << "[P-update] " << tag
+
+        // Re-run forward sim with updated MrInv so Vr is back at equilibrium,
+        // refresh reg accumulators (M_kappa changed), recompute spn_energy.
+        distance   = recomputeForwardState();
+        kappa_reg  = computeKappaReg();
+        lambda_reg = computeLambdaReg();
+        spn_energy = distance + kappa_reg + lambda_reg;
+
+        std::cout << "[OptP finish] " << tag
                   << ": lambda range [" << lambdaVec.minCoeff()
-                  << ", " << lambdaVec.maxCoeff() << "]\n";
+                  << ", " << lambdaVec.maxCoeff() << "]  ";
+        printStageStats();
     };
 
     // ---- Warm-up: pure-SPN SGN (no penalty) so distance/projected-distance
@@ -306,11 +352,24 @@ int main(int /*argc*/, char * /*argv*/[])
         printStageStats();
 
         runArapPUpdate("warmup" + std::to_string(kw));
-        // Reg accumulators after M_kappa refresh.
-        kappa_reg = computeKappaReg();
-        lambda_reg = computeLambdaReg();
+        // runArapPUpdate already refreshed kappa_reg / lambda_reg / spn_energy.
     }
     printf("============================ Warmup done, entering MGDA ============================\n");
+
+    // ---- Trust-region safeguard state -------------------------------------
+    // Snapshot of the best (dist, proj_dist) state seen.  At the end of each
+    // MGDA stage, if BOTH `distance` and `projected_distance` worsen
+    // relative to the snapshot, the stage is REJECTed: state reverts to
+    // the snapshot.  Otherwise ACCEPT and update.
+    double dist_best = std::numeric_limits<double>::infinity();
+    double proj_best = std::numeric_limits<double>::infinity();
+    Eigen::MatrixXd                Vr_best        = Vr;
+    FaceData<double>               lambda_pf_best = lambda_pf_s;
+    FaceData<double>               kappa_pf_best  = kappa_pf_s;
+    Eigen::MatrixXd                P_best         = P;
+    FaceData<Eigen::Matrix2d>      MrInv_best     = MrInv;
+    Eigen::SparseMatrix<double>    M_kappa_best   = M_kappa;
+    double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
     while (k < stage_iter)
     {
@@ -346,6 +405,45 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
         runArapPUpdate("stage" + std::to_string(k));
+        // runArapPUpdate already refreshed kappa_reg / lambda_reg / spn_energy.
+
+        // ---- Trust-region safeguard: accept / reject this stage -----------
+        const double dist_new = distance;
+        const double proj_new = computeProjectedDistance();
+        const bool   reject   = (dist_new > dist_best) && (proj_new > proj_best);
+        if (!reject)
+        {
+            dist_best       = dist_new;
+            proj_best       = proj_new;
+            Vr_best         = Vr;
+            lambda_pf_best  = lambda_pf_s;
+            kappa_pf_best   = kappa_pf_s;
+            P_best          = P;
+            MrInv_best      = MrInv;
+            M_kappa_best    = M_kappa;
+            kappa_reg_best  = kappa_reg;
+            lambda_reg_best = lambda_reg;
+            std::cout << "[ACCEPT] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << "  (best updated)\n";
+        }
+        else
+        {
+            Vr          = Vr_best;
+            lambda_pf_s = lambda_pf_best;
+            kappa_pf_s  = kappa_pf_best;
+            P           = P_best;
+            MrInv       = MrInv_best;
+            M_kappa     = M_kappa_best;
+            kappa_reg   = kappa_reg_best;
+            lambda_reg  = lambda_reg_best;
+            distance    = dist_best;
+            std::cout << "[REJECT] stage " << k
+                      << ": dist=" << dist_new << ">" << dist_best
+                      << " AND proj=" << proj_new << ">" << proj_best
+                      << "; revert\n";
+        }
+        // -------------------------------------------------------------------
 
         k++;
 
@@ -357,16 +455,45 @@ int main(int /*argc*/, char * /*argv*/[])
             break;
         }
 
-        // Refresh kappa_reg after M_kappa update (MrInv changed).
-        kappa_reg = computeKappaReg();
-        lambda_reg = computeLambdaReg();
-
         printf("----------------------------------------------------------------------------------------------------------------------\n");
     }
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
     igl::writeOBJ(morph_dir + "patch_0_inv.obj", Vr, F);
+
+    // ---- Final projected forward sim (manufacturing reality) --------------
+    // Snap (lambda, kappa) per face to nearest feasible (t1, t2), run
+    // forward Newton on the snapped material, write resulting mesh as
+    // patch_0_proj.obj.  This is what the device will actually produce.
+    double final_proj_dist = 0.0;
+    {
+        FaceData<double> kappa_pf_proj(mesh);
+        FaceData<double> lambda_pf_proj(mesh);
+        for (Face f : mesh.faces())
+        {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+            lambda_pf_proj[f] = ac.feasible_lamb[idx];
+        }
+        auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                                               E, nu, ac.thickness,
+                                               config.RuntimeSetting.w_s,
+                                               config.RuntimeSetting.w_b, ref_faces);
+        Eigen::MatrixXd Vr_proj = Vr;
+        newton(geometry, Vr_proj, simFunc_proj,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                double d = Vr_proj(i, j) - targetV(i, j);
+                final_proj_dist += masses(3 * i + j) * d * d;
+            }
+        const std::string proj_path = morph_dir + "patch_0_proj.obj";
+        igl::writeOBJ(proj_path, Vr_proj, F);
+        spdlog::info("Proj mesh -> {}", proj_path);
+    }
 
     // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
     // Writes two files:
@@ -392,6 +519,14 @@ int main(int /*argc*/, char * /*argv*/[])
         spdlog::info("Material -> {}", mat_path);
         spdlog::info("LamKap   -> {}", lk_path);
     }
+
+    // ---- Highlight: final manufacturing distance ----
+    std::cout << "\n";
+    std::cout << "==========================================================\n";
+    std::cout << "  FINAL Projected distance (manufactured design):  "
+              << final_proj_dist << "\n";
+    std::cout << "==========================================================\n";
+    std::cout << "\n";
 
     spdlog::info("Inverse (single mesh): done.  Output -> {}", morph_dir);
     return 0;

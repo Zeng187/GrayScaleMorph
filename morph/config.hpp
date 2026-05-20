@@ -57,8 +57,6 @@ public:
         int    MaxIter;
         int    nFmin;
         double epsilon;
-        double wM;
-        double wL;
         double wM_kap;
         double wL_kap;
         double wM_lam;
@@ -69,6 +67,8 @@ public:
         double wP_lam;
         double penalty_threshold;
         double betaP;
+        bool   snap_before_P;
+        int    stage_iter;
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------
