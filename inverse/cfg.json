@@ -9,8 +9,6 @@
 		"MaxIter": [ 10 ],
 		"nFmin": [ 1000 ],
 		"epsilon": [ 1e-6 ],
-		"wM": [ 0.01 ],
-		"wL": [ 0.01 ],
 		"wM_kap": [ 0.1 ],
 		"wL_kap": [ 0.01 ],
 		"wM_lam": [ 0.00 ],
@@ -21,6 +19,8 @@
 		"wP_lam": [ 0.1 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 100 ],
-		"snap_before_P": [ false ]
+		"snap_before_P": [ false ],
+		"stage_iter": [ 5 ],
+		"wP_growth_factor": [ 1.0 ]
 	}
 }

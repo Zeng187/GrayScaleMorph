@@ -57,8 +57,6 @@ public:
         int    MaxIter;
         int    nFmin;
         double epsilon;
-        double wM;
-        double wL;
         double wM_kap;
         double wL_kap;
         double wM_lam;
@@ -69,7 +67,9 @@ public:
         double wP_lam;
         double penalty_threshold;
         double betaP;
-        bool   snap_before_P;  // hard-snap (lambda, kappa) to nearest feasible before each P-update
+        bool   snap_before_P;       // hard-snap (lambda, kappa) to nearest feasible before each P-update
+        int    stage_iter;          // outer alternating-stage count
+        double wP_growth_factor;    // initial value of (1 + factor) homotopy step; halved on REJECT
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

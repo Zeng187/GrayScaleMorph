@@ -177,7 +177,7 @@ int main(int /*argc*/, char * /*argv*/[])
     auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
     auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
 
-    int stage_iter = 5;
+    int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;
 
     double wM_kap = config.RuntimeSetting.wM_kap;
@@ -296,11 +296,12 @@ int main(int /*argc*/, char * /*argv*/[])
 
     // Dynamic wP growth, expressed as a multiplicative *increment* factor:
     //   wP_new = wP * (1 + wP_growth_factor)
-    // Starts at 1.0 (initial wP doubles per stage, same as the previous
-    // `wP *= 2` schedule), and is halved every time a stage is REJECTed.
-    // factor -> 0 naturally damps the homotopy to "no growth" (wP * 1).
-    // Floored at 1e-4 so a future ACCEPT can still gently tighten wP.
-    double wP_growth_factor = 1.0;
+    // Initial value read from cfg.json (RuntimeSettings.wP_growth_factor,
+    // default 1.0 -> wP doubles per stage).  Halved every time a stage is
+    // REJECTed; factor -> 0 naturally damps the homotopy to "no growth"
+    // (wP * 1).  Floored at 1e-4 so a future ACCEPT can still gently
+    // tighten wP.
+    double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
 
     while (k < stage_iter)
     {

@@ -213,7 +213,7 @@ int main(int argc, char* argv[])
         auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
         auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
-        int stage_iter = 5;
+        int stage_iter = config.RuntimeSetting.stage_iter;
         int k = 0;
 
         double wM_kap = config.RuntimeSetting.wM_kap;
@@ -326,7 +326,7 @@ int main(int argc, char* argv[])
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg_np,
                 adjointFunc_OptKap, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM_kap, config.RuntimeSetting.wL_kap,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
                 distance_kap, spn_kap, self_reg_kap);
             kappa_reg_np = self_reg_kap;
@@ -338,7 +338,7 @@ int main(int argc, char* argv[])
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg_np,
                 adjointFunc_OptLam, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM_lam, config.RuntimeSetting.wL_lam,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
                 distance_lam, spn_lam, self_reg_lam);
             lambda_reg_np = self_reg_lam;
