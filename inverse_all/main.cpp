@@ -24,6 +24,7 @@
 #include "simulation_utils.h"
 #include "functions.h"
 #include "newton.h"
+#include "LocalGlobalSolver.h"
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "output.hpp"
@@ -199,9 +200,14 @@ int main(int argc, char* argv[])
         // Face-space matrices to compute the other-variable regulariser as
         // a constant offset, so OptKap/OptLam stages share a unified SPN
         // energy formula (distance + kappa_reg + lambda_reg).
-        const Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
+        // M_kappa depends on MrInv -> refreshed on every P-update.
+        Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
         const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
         const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
+
+        // ARAP solver for the per-stage lambda-aware P-update.  Built once
+        // per patch from (V, F); cotmatrix factorisation reused.
+        LocalGlobalSolver paramSolver(V, F);
 
         spdlog::info("Step 4: Inverse Design.");
 
@@ -239,76 +245,172 @@ int main(int argc, char* argv[])
         double kappa_reg  = computeKappaReg();
         double lambda_reg = computeLambdaReg();
         double self_reg   = 0.0;
-        while(k < stage_iter)
+
+        // Projected distance: snap (kappa, lambda) to nearest feasible per face,
+        // re-run forward Newton, return mass-weighted distance to target.
+        auto computeProjectedDistance = [&]() -> double {
+            FaceData<double> kappa_pf_proj(mesh);
+            FaceData<double> lambda_pf_proj(mesh);
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+                lambda_pf_proj[f] = ac.feasible_lamb[idx];
+            }
+            auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Eigen::MatrixXd Vr_proj = Vr;
+            newton(geometry, Vr_proj, simFunc_proj,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+            double d2 = 0.0;
+            for (size_t i = 0; i < nV; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    double d = Vr_proj(i, j) - targetV(i, j);
+                    d2 += masses(3 * i + j) * d * d;
+                }
+            return d2;
+        };
+
+        // Re-run forward Newton on current (P, lambda, kappa) to bring Vr back
+        // to equilibrium after a P-update changed MrInv.
+        auto recomputeForwardState = [&]() -> double {
+            auto simFunc = simulationFunction(geometry, MrInv, lambda_pf_s, kappa_pf_s,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            newton(geometry, Vr, simFunc,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+            double d2 = 0.0;
+            for (size_t i = 0; i < nV; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    double d = Vr(i, j) - targetV(i, j);
+                    d2 += masses(3 * i + j) * d * d;
+                }
+            return d2;
+        };
+
+        // ---- Trust-region best snapshot ------------------------------------
+        double dist_best = std::numeric_limits<double>::infinity();
+        double proj_best = std::numeric_limits<double>::infinity();
+        Eigen::MatrixXd            Vr_best         = Vr;
+        FaceData<double>           lambda_pf_best  = lambda_pf_s;
+        FaceData<double>           kappa_pf_best   = kappa_pf_s;
+        Eigen::MatrixXd            P_best          = P;
+        FaceData<Eigen::Matrix2d>  MrInv_best      = MrInv;
+        Eigen::SparseMatrix<double> M_kappa_best   = M_kappa;
+        double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
+        double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
+        double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
+        double kappa_reg_best  = kappa_reg;
+        double lambda_reg_best = lambda_reg;
+        double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
+
+        while (k < stage_iter)
         {
-            spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
+            spdlog::info("Patch {} Stage {}: wP_kap={:.6f}, wP_lam={:.6f}, wM_kap={:.6f}, wL_kap={:.6f}, wM_lam={:.6f}, wL_lam={:.6f}",
+                         pd.idx, k, wP_kap, wP_lam, wM_kap, wL_kap, wM_lam, wL_lam);
+
+            // -- OptKap --
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg);
             kappa_reg = self_reg;
+            penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+            penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+            spdlog::info("Patch {} Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
+                         pd.idx, k, spn_energy, distance, computeProjectedDistance(), penalty_kap, penalty_lam);
 
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
-            penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
-
-
-
-            spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
+            // -- OptLam --
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg);
             lambda_reg = self_reg;
+            penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+            penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+            spdlog::info("Patch {} Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
+                         pd.idx, k, spn_energy, distance, computeProjectedDistance(), penalty_kap, penalty_lam);
 
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
-            penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptLam finish- Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
-
-            // Evaluate distance after jointly projecting kappa and lambda to the same feasible index
-            {
-                FaceData<double> kappa_pf_proj(mesh);
-                FaceData<double> lambda_pf_proj(mesh);
-
+            // -- Optional joint snap (lambda, kappa) before P-update --
+            if (config.RuntimeSetting.snap_before_P) {
                 for (Face f : mesh.faces()) {
-                    double kap = kappa_pf_s[f];
-                    double lam = lambda_pf_s[f];
-                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
-                    kappa_pf_proj[f] = ac.feasible_kapp[idx];
-                    lambda_pf_proj[f] = ac.feasible_lamb[idx];
+                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                                kappa_pf_s[f], lambda_pf_s[f]);
+                    lambda_pf_s[f] = ac.feasible_lamb[idx];
+                    kappa_pf_s[f]  = ac.feasible_kapp[idx];
                 }
+            }
 
-                auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
-                    E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-                Eigen::MatrixXd Vr_proj = Vr;
-                newton(geometry, Vr_proj, simFunc_proj,
-                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+            // -- Lambda-aware ARAP P-update --
+            {
+                Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
+                Eigen::VectorXd sTarget   = 1.0 / lambdaVec.array();
+                Eigen::MatrixX2d P_2d = P;
+                paramSolver.solve(P_2d, sTarget, sTarget, 10);
+                P = P_2d;
 
-                double dist_proj = 0.0;
-                for (size_t i = 0; i < nV; ++i)
-                    for (int j = 0; j < 3; ++j) {
-                        double d = Vr_proj(i, j) - targetV(i, j);
-                        dist_proj += masses(3 * i + j) * d * d;
-                    }
-                spdlog::info("Patch {} Stage {}, Projected distance: {:.6f}", pd.idx, k, dist_proj);
+                // Refresh P-dependent quantities.
+                MrInv = precomputeMrInv(mesh, P, F);
+                M_kappa = computeFaceMassKappa(mesh, MrInv);
+
+                distance   = recomputeForwardState();
+                kappa_reg  = computeKappaReg();
+                lambda_reg = computeLambdaReg();
+                spn_energy = distance + kappa_reg + lambda_reg;
+                spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} (lambda range [{:.4f},{:.4f}])",
+                             pd.idx, k, spn_energy, distance, computeProjectedDistance(),
+                             lambdaVec.minCoeff(), lambdaVec.maxCoeff());
+            }
+
+            // -- Trust-region safeguard: accept / reject this stage --
+            const double dist_new = distance;
+            const double proj_new = computeProjectedDistance();
+            const bool reject     = (dist_new > dist_best) && (proj_new > proj_best);
+
+            if (!reject) {
+                dist_best       = dist_new;
+                proj_best       = proj_new;
+                Vr_best         = Vr;
+                lambda_pf_best  = lambda_pf_s;
+                kappa_pf_best   = kappa_pf_s;
+                P_best          = P;
+                MrInv_best      = MrInv;
+                M_kappa_best    = M_kappa;
+                wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
+                wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
+                wP_kap_best     = wP_kap;   wP_lam_best = wP_lam;
+                kappa_reg_best  = kappa_reg;
+                lambda_reg_best = lambda_reg;
+                spdlog::info("Patch {} Stage {} [ACCEPT] dist={:.6f} proj={:.6f}", pd.idx, k, dist_new, proj_new);
+            } else {
+                Vr          = Vr_best;
+                lambda_pf_s = lambda_pf_best;
+                kappa_pf_s  = kappa_pf_best;
+                P           = P_best;
+                MrInv       = MrInv_best;
+                M_kappa     = M_kappa_best;
+                wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
+                wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
+                wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
+                kappa_reg   = kappa_reg_best;
+                lambda_reg  = lambda_reg_best;
+                wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
+                spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor -> {:.6f}",
+                             pd.idx, k, dist_new, dist_best, proj_new, proj_best, wP_growth_factor);
             }
 
             k++;
-            if (penalty_kap >= penalty_threshold) {
-                wP_kap *= 10;
-            }
-            if (penalty_lam >= penalty_threshold) {
-                wP_lam *= 10;
-            }
+            const double wP_step = 1.0 + wP_growth_factor;
+            if (penalty_kap >= penalty_threshold) wP_kap *= wP_step;
+            if (penalty_lam >= penalty_threshold) wP_lam *= wP_step;
 
-            if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
-                break;
+            wM_kap *= 0.5;  wL_kap *= 0.5;
+            wM_lam *= 0.5;  wL_lam *= 0.5;
+            kappa_reg  = computeKappaReg();
+            lambda_reg = computeLambdaReg();
         }
 
 
@@ -357,6 +459,35 @@ int main(int argc, char* argv[])
         // Vr lives in the same physical frame as V; write as-is.
         igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_inv.obj", Vr, F);
 
+        // ---- Final projected forward sim (manufacturing reality) ----------
+        // Snap (lambda, kappa) per face to the nearest feasible (t1, t2) pair,
+        // run forward Newton on the snapped material, write the resulting mesh
+        // and report the manufacturing distance prominently.
+        double final_proj_dist = 0.0;
+        {
+            FaceData<double> kappa_pf_proj(mesh);
+            FaceData<double> lambda_pf_proj(mesh);
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+                lambda_pf_proj[f] = ac.feasible_lamb[idx];
+            }
+            auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Eigen::MatrixXd Vr_proj = Vr;
+            newton(geometry, Vr_proj, simFunc_proj,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+            for (size_t i = 0; i < nV; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    double d = Vr_proj(i, j) - targetV(i, j);
+                    final_proj_dist += masses(3 * i + j) * d * d;
+                }
+            const std::string proj_path = morph_dir + "patch_" + std::to_string(pd.idx) + "_proj.obj";
+            igl::writeOBJ(proj_path, Vr_proj, F);
+            spdlog::info("Patch {} proj mesh -> {}", pd.idx, proj_path);
+        }
+
         // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
         // Writes two files:
         //   patch_{i}_material.txt : face_id  t1  t2          (discrete grayscale)
@@ -380,6 +511,15 @@ int main(int argc, char* argv[])
             spdlog::info("Patch {} material -> {}", pd.idx, mat_path);
             spdlog::info("Patch {} lamkap   -> {}", pd.idx, lk_path);
         }
+
+        // Highlight: final manufacturing distance for this patch.
+        std::cout << "\n";
+        std::cout << "==========================================================\n";
+        std::cout << "  Patch " << pd.idx
+                  << "  FINAL Projected distance (manufactured): "
+                  << final_proj_dist << "\n";
+        std::cout << "==========================================================\n";
+        std::cout << "\n";
 
         spdlog::info("Patch {} done.", pd.idx);
     }
