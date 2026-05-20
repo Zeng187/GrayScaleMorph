@@ -146,6 +146,7 @@ int main(int /*argc*/, char * /*argv*/[])
     // V_init: flat plate (P embedded as z=0) rigidly aligned so the 3 fixed
     // vertices sit exactly at their target positions in V.
     Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
+    igl::writeOBJ(morph_dir + "patch_0_init.obj", Vr, F);
 
     // Lumped vertex mass vector (size 3*nV); shared by every SGN call so the
     // distance/SPN values reported by main and inside the solver are computed

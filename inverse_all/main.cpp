@@ -190,6 +190,7 @@ int main(int argc, char* argv[])
         auto V_pred = V;
         // V_init: flat plate aligned so fixed vertices match V exactly.
         Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
+        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_init.obj", Vr, F);
 
         // Lumped vertex mass vector (size 3*nV) -- shared by all SGN calls so
         // distance/SPN values match between main and the solver exactly.
