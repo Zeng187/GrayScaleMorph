@@ -306,14 +306,29 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
+        // ---- Joint snap to feasible material BEFORE P-update --------------
+        // The continuous (lambda, kappa) SGN solution will never be the
+        // actually-manufactured design; the final design is the snapped one.
+        // Aligning P with the snapped (lambda, kappa) is therefore more
+        // honest and avoids the "P fits continuous but proj_dist measures
+        // snapped" mismatch.  Effect: each stage becomes a proximal step
+        // (continuous SGN -> hard snap -> P-update).
+        for (Face f : mesh.faces())
+        {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            lambda_pf_s[f] = ac.feasible_lamb[idx];
+            kappa_pf_s[f]  = ac.feasible_kapp[idx];
+        }
+
         // ---- Lambda-aware ARAP P-update -----------------------------------
-        // Given the per-face lambda assignment from this stage, run a few
-        // ARAP iterations so that P -> V Jacobian SVD on each face is
-        // clamped to {1/lambda_f}.  This minimises stretch energy w.r.t.
-        // the current lambda field, giving the next stage a better warm
-        // start.  After P changes, MrInv and the kappa face-mass matrix
-        // must be refreshed (M_lambda, L_face, masses are V/topology-only
-        // and stay unchanged).
+        // Given the per-face lambda assignment from this stage (now snapped
+        // to feasible candidates), run a few ARAP iterations so that
+        // P -> V Jacobian SVD on each face is clamped to {1/lambda_f}.
+        // This minimises stretch energy w.r.t. the actual manufactured
+        // lambda field.  After P changes, MrInv and the kappa face-mass
+        // matrix must be refreshed (M_lambda, L_face, masses are V/topology
+        // -only and stay unchanged).
         {
             Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
             Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
