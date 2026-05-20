@@ -242,6 +242,34 @@ int main(int /*argc*/, char * /*argv*/[])
                   << ", Penalty_lam: " << penalty_lam
                   << "\n";
 
+        // Projected distance: snap each face's (kappa, lambda) to the nearest
+        // feasible material pair, then re-run forward Newton.  This is what
+        // the discrete material design will actually produce.
+        {
+            FaceData<double> kappa_pf_proj(mesh);
+            FaceData<double> lambda_pf_proj(mesh);
+            for (Face f : mesh.faces()) {
+                double kap = kappa_pf_s[f];
+                double lam = lambda_pf_s[f];
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
+                kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+                lambda_pf_proj[f] = ac.feasible_lamb[idx];
+            }
+            auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Eigen::MatrixXd Vr_proj = Vr;
+            newton(geometry, Vr_proj, simFunc_proj,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+
+            double dist_proj = 0.0;
+            for (size_t i = 0; i < nV; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    double d = Vr_proj(i, j) - targetV(i, j);
+                    dist_proj += masses(3 * i + j) * d * d;
+                }
+            std::cout << "Projected distance: " << dist_proj << "\n";
+        }
+
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
         k++;

@@ -289,8 +289,13 @@ int main(int argc, char* argv[])
                 Eigen::MatrixXd Vr_proj = Vr;
                 newton(geometry, Vr_proj, simFunc_proj,
                     config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
-                double dist_proj = (Vr_proj - targetV).squaredNorm() / nV;
 
+                double dist_proj = 0.0;
+                for (size_t i = 0; i < nV; ++i)
+                    for (int j = 0; j < 3; ++j) {
+                        double d = Vr_proj(i, j) - targetV(i, j);
+                        dist_proj += masses(3 * i + j) * d * d;
+                    }
                 spdlog::info("Patch {} Stage {}, Projected distance: {:.6f}", pd.idx, k, dist_proj);
             }
 
