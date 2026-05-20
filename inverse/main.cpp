@@ -294,10 +294,13 @@ int main(int /*argc*/, char * /*argv*/[])
     double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
-    // Dynamic wP growth factor: starts from cfg value (2.0 by default),
-    // halved every time a stage is REJECTed.  Floored at 1.0 + 1e-3 so it
-    // never collapses to "no growth" exactly.
-    double wP_growth = 2.0;
+    // Dynamic wP growth, expressed as a multiplicative *increment* factor:
+    //   wP_new = wP * (1 + wP_growth_factor)
+    // Starts at 1.0 (initial wP doubles per stage, same as the previous
+    // `wP *= 2` schedule), and is halved every time a stage is REJECTed.
+    // factor -> 0 naturally damps the homotopy to "no growth" (wP * 1).
+    // Floored at 1e-4 so a future ACCEPT can still gently tighten wP.
+    double wP_growth_factor = 1.0;
 
     while (k < stage_iter)
     {
@@ -442,19 +445,21 @@ int main(int /*argc*/, char * /*argv*/[])
             wP_lam      = wP_lam_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
-            wP_growth   = std::max(1.0 + 1e-3, wP_growth * 0.5);
+            wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
             std::cout << "[REJECT] stage " << k
                       << ": dist=" << dist_new << ">" << dist_best
                       << " AND proj=" << proj_new << ">" << proj_best
-                      << "; revert, wP_growth -> " << wP_growth << "\n";
+                      << "; revert, wP_growth_factor -> " << wP_growth_factor
+                      << " (next wP *= " << (1.0 + wP_growth_factor) << ")\n";
         }
         // -------------------------------------------------------------------
 
         k++;
+        const double wP_step = 1.0 + wP_growth_factor;
         if (penalty_kap >= penalty_threshold)
-            wP_kap *= wP_growth;
+            wP_kap *= wP_step;
         if (penalty_lam >= penalty_threshold)
-            wP_lam *= wP_growth;
+            wP_lam *= wP_step;
 
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;
