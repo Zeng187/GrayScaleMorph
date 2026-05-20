@@ -184,17 +184,63 @@ int main(int /*argc*/, char * /*argv*/[])
 
     // Regularisation accumulators kept in sync between stages so each SGN call
     // receives the *other* variable's regulariser as a constant offset.
-    auto computeKappaReg = [&]() {
+    auto computeKappaReg = [&]()
+    {
         const Eigen::VectorXd k = kappa_pf_s.toVector();
         return wM_kap * k.dot(M_kappa * k) + wL_kap * k.dot(L_face * k);
     };
-    auto computeLambdaReg = [&]() {
+    auto computeLambdaReg = [&]()
+    {
         const Eigen::VectorXd l = lambda_pf_s.toVector();
         return wM_lam * l.dot(M_lambda * l) + wL_lam * l.dot(L_face * l);
     };
     double kappa_reg = computeKappaReg();
     double lambda_reg = computeLambdaReg();
     double self_reg = 0.0;
+
+    // Projected distance: snap the current (kappa, lambda) on every face to the
+    // nearest feasible material pair, re-run forward Newton, and return the
+    // mass-weighted distance from the resulting Vr_proj to the target.  This
+    // is what the discretised material design will actually produce.
+    auto computeProjectedDistance = [&]() -> double
+    {
+        FaceData<double> kappa_pf_proj(mesh);
+        FaceData<double> lambda_pf_proj(mesh);
+        for (Face f : mesh.faces())
+        {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            kappa_pf_proj[f] = ac.feasible_kapp[idx];
+            lambda_pf_proj[f] = ac.feasible_lamb[idx];
+        }
+        auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                                               E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Eigen::MatrixXd Vr_proj = Vr;
+        newton(geometry, Vr_proj, simFunc_proj,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        double d2 = 0.0;
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                double d = Vr_proj(i, j) - targetV(i, j);
+                d2 += masses(3 * i + j) * d * d;
+            }
+        return d2;
+    };
+
+    // One-line stage stats: SPN energy -> Distance -> Projected distance -> Penalties.
+    auto printStageStats = [&]()
+    {
+        const double proj_dist = computeProjectedDistance();
+        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+        std::cout << "SPN energy: " << spn_energy
+                  << ", Distance: " << distance
+                  << ", Projected distance: " << proj_dist
+                  << ", Penalty_kap: " << penalty_kap
+                  << ", Penalty_lam: " << penalty_lam
+                  << "\n";
+    };
 
     while (k < stage_iter)
     {
@@ -211,16 +257,9 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg);
-        kappa_reg = self_reg;  // sync for the next OptLam call
+        kappa_reg = self_reg; // sync for the next OptLam call
 
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
-        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-
-        std::cout << "Distance: " << distance
-                  << ", SPN energy: " << spn_energy
-                  << ", Penalty_kap: " << penalty_kap
-                  << ", Penalty_lam: " << penalty_lam
-                  << "\n";
+        printStageStats();
 
         printf("----------------------------  OptKap Finish ----------------------------\n", k);
 
@@ -231,44 +270,9 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg);
-        lambda_reg = self_reg;  // sync for the next OptKap call
+        lambda_reg = self_reg; // sync for the next OptKap call
 
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
-        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-
-        std::cout << "Distance: " << distance
-                  << ", SPN energy: " << spn_energy
-                  << ", Penalty_kap: " << penalty_kap
-                  << ", Penalty_lam: " << penalty_lam
-                  << "\n";
-
-        // Projected distance: snap each face's (kappa, lambda) to the nearest
-        // feasible material pair, then re-run forward Newton.  This is what
-        // the discrete material design will actually produce.
-        {
-            FaceData<double> kappa_pf_proj(mesh);
-            FaceData<double> lambda_pf_proj(mesh);
-            for (Face f : mesh.faces()) {
-                double kap = kappa_pf_s[f];
-                double lam = lambda_pf_s[f];
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
-                kappa_pf_proj[f]  = ac.feasible_kapp[idx];
-                lambda_pf_proj[f] = ac.feasible_lamb[idx];
-            }
-            auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Eigen::MatrixXd Vr_proj = Vr;
-            newton(geometry, Vr_proj, simFunc_proj,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
-
-            double dist_proj = 0.0;
-            for (size_t i = 0; i < nV; ++i)
-                for (int j = 0; j < 3; ++j) {
-                    double d = Vr_proj(i, j) - targetV(i, j);
-                    dist_proj += masses(3 * i + j) * d * d;
-                }
-            std::cout << "Projected distance: " << dist_proj << "\n";
-        }
+        printStageStats();
 
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
@@ -288,7 +292,7 @@ int main(int /*argc*/, char * /*argv*/[])
         // Recompute reg accumulators after weight decay so the next stage's
         // SPN energy formula uses the *new* weights consistently for both
         // kappa_reg and lambda_reg.
-        kappa_reg  = computeKappaReg();
+        kappa_reg = computeKappaReg();
         lambda_reg = computeLambdaReg();
 
         printf("----------------------------------------------------------------------------------------------------------------------\n");
