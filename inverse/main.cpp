@@ -272,6 +272,33 @@ int main(int /*argc*/, char * /*argv*/[])
                   << "\n";
     };
 
+    // ---- Trust-region-style safeguard state -------------------------------
+    // Keep a snapshot of the best (lowest dist + proj_dist) state seen so
+    // far.  At the end of each stage, if both `distance` and
+    // `projected_distance` worsened relative to the best snapshot, the
+    // stage is REJECTED: the entire state (Vr, lambda, kappa, P, MrInv,
+    // M_kappa, reg accumulators, weights) reverts to the snapshot, and
+    // the homotopy growth factor for wP is halved so the next attempt
+    // takes a smaller step.  Otherwise the stage is ACCEPTED and the
+    // snapshot is updated.
+    double dist_best = std::numeric_limits<double>::infinity();
+    double proj_best = std::numeric_limits<double>::infinity();
+    Eigen::MatrixXd                 Vr_best = Vr;
+    FaceData<double>                lambda_pf_best = lambda_pf_s;
+    FaceData<double>                kappa_pf_best  = kappa_pf_s;
+    Eigen::MatrixXd                 P_best  = P;
+    FaceData<Eigen::Matrix2d>       MrInv_best = MrInv;
+    Eigen::SparseMatrix<double>     M_kappa_best = M_kappa;
+    double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
+    double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
+    double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
+    double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
+
+    // Dynamic wP growth factor: starts from cfg value (2.0 by default),
+    // halved every time a stage is REJECTed.  Floored at 1.0 + 1e-3 so it
+    // never collapses to "no growth" exactly.
+    double wP_growth = 2.0;
+
     while (k < stage_iter)
     {
 
@@ -370,12 +397,65 @@ int main(int /*argc*/, char * /*argv*/[])
         }
         // -------------------------------------------------------------------
 
+        // ---- Trust-region safeguard: accept / reject this stage -----------
+        const double dist_new = distance;                      // continuous (after P-update)
+        const double proj_new = computeProjectedDistance();    // snap-then-forward
+        const bool reject     = (dist_new > dist_best) && (proj_new > proj_best);
+
+        if (!reject)
+        {
+            // ACCEPT: snapshot becomes the current state.
+            dist_best       = dist_new;
+            proj_best       = proj_new;
+            Vr_best         = Vr;
+            lambda_pf_best  = lambda_pf_s;
+            kappa_pf_best   = kappa_pf_s;
+            P_best          = P;
+            MrInv_best      = MrInv;
+            M_kappa_best    = M_kappa;
+            wM_kap_best     = wM_kap;
+            wL_kap_best     = wL_kap;
+            wM_lam_best     = wM_lam;
+            wL_lam_best     = wL_lam;
+            wP_kap_best     = wP_kap;
+            wP_lam_best     = wP_lam;
+            kappa_reg_best  = kappa_reg;
+            lambda_reg_best = lambda_reg;
+            std::cout << "[ACCEPT] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << "  (best updated)\n";
+        }
+        else
+        {
+            // REJECT: revert everything to the best snapshot, halve wP growth.
+            Vr          = Vr_best;
+            lambda_pf_s = lambda_pf_best;
+            kappa_pf_s  = kappa_pf_best;
+            P           = P_best;
+            MrInv       = MrInv_best;
+            M_kappa     = M_kappa_best;
+            wM_kap      = wM_kap_best;
+            wL_kap      = wL_kap_best;
+            wM_lam      = wM_lam_best;
+            wL_lam      = wL_lam_best;
+            wP_kap      = wP_kap_best;
+            wP_lam      = wP_lam_best;
+            kappa_reg   = kappa_reg_best;
+            lambda_reg  = lambda_reg_best;
+            wP_growth   = std::max(1.0 + 1e-3, wP_growth * 0.5);
+            std::cout << "[REJECT] stage " << k
+                      << ": dist=" << dist_new << ">" << dist_best
+                      << " AND proj=" << proj_new << ">" << proj_best
+                      << "; revert, wP_growth -> " << wP_growth << "\n";
+        }
+        // -------------------------------------------------------------------
+
         k++;
         if (penalty_kap >= penalty_threshold)
-            wP_kap *= 2;
+            wP_kap *= wP_growth;
         if (penalty_lam >= penalty_threshold)
-            wP_lam *= 2;
-            
+            wP_lam *= wP_growth;
+
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;
 
@@ -393,6 +473,12 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------------------------------------------------------------------------------------------------\n");
     }
+
+    // Stage loop exited.  If the last stage was REJECTED, the state was
+    // already reverted to the best snapshot above; if it was ACCEPTED, the
+    // snapshot equals the current state.  Either way Vr / lambda_pf_s /
+    // kappa_pf_s already hold the best material design for downstream
+    // material output and final projected forward-sim.
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
