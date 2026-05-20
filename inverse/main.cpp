@@ -33,6 +33,7 @@
 #include "simulation_utils.h"
 #include "functions.h"
 #include "newton.h"
+#include "LocalGlobalSolver.h"
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
 #include "boundary_utils.h"
@@ -156,9 +157,16 @@ int main(int /*argc*/, char * /*argv*/[])
     // Face-space matrices used to build the *other-variable* regulariser as a
     // constant offset, so the SPN energy printed by the OptKap/OptLam stages
     // share the same formula:  distance + kappa_reg + lambda_reg.
-    const Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
+    // M_kappa depends on MrInv -> must be refreshed if P (and hence MrInv)
+    // changes between stages (lambda-aware ARAP P-update).
+    Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
     const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
     const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
+
+    // ARAP solver for the lambda-aware P-update done at each stage end.
+    // Initialised once from (V, F): cotmatrix / factorisation is reused
+    // across all stages since V topology doesn't change.
+    LocalGlobalSolver paramSolver(V, F);
 
     spdlog::info("Step 4: Inverse Design.");
 
@@ -276,6 +284,37 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
+        // ---- Lambda-aware ARAP P-update -----------------------------------
+        // Given the per-face lambda assignment from this stage, run a few
+        // ARAP iterations so that P -> V Jacobian SVD on each face is
+        // clamped to {1/lambda_f}.  This minimises stretch energy w.r.t.
+        // the current lambda field, giving the next stage a better warm
+        // start.  After P changes, MrInv and the kappa face-mass matrix
+        // must be refreshed (M_lambda, L_face, masses are V/topology-only
+        // and stay unchanged).
+        {
+            Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
+            Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
+            Eigen::MatrixX2d P_2d = P;
+            paramSolver.solve(P_2d, sTarget, sTarget, 10);
+            P = P_2d;
+
+            // Write updated flat-plate P (z=0) to disk for inspection.
+            Eigen::MatrixXd P_obj(P.rows(), 3);
+            P_obj.leftCols(2) = P;
+            P_obj.col(2).setZero();
+            igl::writeOBJ(morph_dir + "patch_0_P_stage" + std::to_string(k) + ".obj",
+                          P_obj, F);
+
+            // Refresh P-dependent quantities.
+            MrInv = precomputeMrInv(mesh, P, F);
+            M_kappa = computeFaceMassKappa(mesh, MrInv);
+            std::cout << "[P-update] stage " << k
+                      << ": lambda range [" << lambdaVec.minCoeff()
+                      << ", " << lambdaVec.maxCoeff() << "]\n";
+        }
+        // -------------------------------------------------------------------
+
         k++;
         if (penalty_kap >= penalty_threshold)
             wP_kap *= 10;
@@ -291,7 +330,8 @@ int main(int /*argc*/, char * /*argv*/[])
 
         // Recompute reg accumulators after weight decay so the next stage's
         // SPN energy formula uses the *new* weights consistently for both
-        // kappa_reg and lambda_reg.
+        // kappa_reg and lambda_reg.  Also picks up the refreshed M_kappa
+        // from the P-update above.
         kappa_reg = computeKappaReg();
         lambda_reg = computeLambdaReg();
 

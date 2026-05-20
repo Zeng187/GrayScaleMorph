@@ -16,6 +16,18 @@ public:
 
   void solve(Eigen::Ref<Eigen::MatrixX2d> U, double sMin, double sMax, int nbIter = -1);
 
+  /// Per-face overloads: clamp each face's projected SVD to its own
+  /// [sMin_pf(i), sMax_pf(i)] window.  Use this for lambda-aware ARAP
+  /// where each face has its own target stretch ratio.
+  void solveOneStep(Eigen::Ref<Eigen::MatrixX2d> U,
+                    const Eigen::VectorXd& sMin_pf,
+                    const Eigen::VectorXd& sMax_pf);
+
+  void solve(Eigen::Ref<Eigen::MatrixX2d> U,
+             const Eigen::VectorXd& sMin_pf,
+             const Eigen::VectorXd& sMax_pf,
+             int nbIter = -1);
+
   Eigen::VectorXd stretchAngles();
 
   Eigen::VectorXd s1;

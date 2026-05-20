@@ -105,6 +105,57 @@ void LocalGlobalSolver::solve(Eigen::Ref<Eigen::MatrixX2d> U, double sMin, doubl
   }
 }
 
+void LocalGlobalSolver::solveOneStep(Eigen::Ref<Eigen::MatrixX2d> U,
+                                     const Eigen::VectorXd& sMin_pf,
+                                     const Eigen::VectorXd& sMax_pf)
+{
+  using namespace Eigen;
+  assert(sMin_pf.size() == nF && sMax_pf.size() == nF);
+
+  Matrix<double, 2, -1> R(2, 2 * nF);
+#pragma omp parallel for schedule(static) num_threads(omp_get_max_threads() - 1)
+  for(int i = 0; i < nF; ++i)
+  {
+    Matrix2d B;
+    B.col(0) = U.row(_F(i, 1)) - U.row(_F(i, 0));
+    B.col(1) = U.row(_F(i, 2)) - U.row(_F(i, 0));
+
+    R.block<2, 2>(0, 2 * i) = project(B * _Ainv.block<2, 2>(0, 2 * i), sMin_pf(i), sMax_pf(i), i);
+  }
+
+  VectorXd Rcol;
+  igl::columnize(R, nF, 2, Rcol);
+  VectorXd Bcol = -_K * Rcol;
+
+  U.col(0) = _solver->solve(-Bcol.segment(0, nV));
+  U.col(1) = _solver->solve(-Bcol.segment(nV, nV));
+}
+
+void LocalGlobalSolver::solve(Eigen::Ref<Eigen::MatrixX2d> U,
+                              const Eigen::VectorXd& sMin_pf,
+                              const Eigen::VectorXd& sMax_pf,
+                              int nbIter)
+{
+  using namespace Eigen;
+  assert(sMin_pf.size() == nF && sMax_pf.size() == nF);
+
+  if(nbIter > 0)
+    for(int i = 0; i < nbIter; ++i)
+      solveOneStep(U, sMin_pf, sMax_pf);
+  else
+  {
+    VectorXd s1_prev = sMin_pf;
+    VectorXd s2_prev = sMax_pf;
+    solveOneStep(U, sMin_pf, sMax_pf);
+    while(std::max((s1 - s1_prev).norm() / s1.size(), (s2 - s2_prev).norm() / s2.size()) > 1e-8)
+    {
+      s1_prev = s1;
+      s2_prev = s2;
+      solveOneStep(U, sMin_pf, sMax_pf);
+    }
+  }
+}
+
 //Eigen::Matrix2d LocalGlobalSolver::project(const Eigen::Matrix2d& M, double sMin, double sMax, int i)
 //{
 //  using namespace Eigen;
