@@ -7,8 +7,6 @@
 
 #include <functional>
 
-struct M_Poly_Curve;
-
 template <class Func, class Solver>
 void newton(
     Eigen::VectorXd& x,
@@ -59,26 +57,6 @@ double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
-Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const Eigen::MatrixXd& initV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(
 geometrycentral::surface::IntrinsicGeometryInterface& geometry,
 const Eigen::MatrixXd& targetV,
@@ -104,28 +82,6 @@ double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
-
-Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const Eigen::MatrixXd& initV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(
@@ -157,51 +113,6 @@ double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
-Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const Eigen::MatrixXd& initV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double wP,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
-
-Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const Eigen::MatrixXd& initV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double wP,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(
 geometrycentral::surface::IntrinsicGeometryInterface& geometry,
 const Eigen::MatrixXd& targetV,
@@ -228,48 +139,4 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
-
-Eigen::MatrixXd sparse_gauss_newton_lay1(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const M_Poly_Curve& strain_curve,
-const M_Poly_Curve& moduls_curve,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
-
-
-Eigen::MatrixXd sparse_gauss_newton_lay2(
-geometrycentral::surface::IntrinsicGeometryInterface& geometry,
-const Eigen::MatrixXd& targetV,
-const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
-geometrycentral::surface::VertexData<double>& theta1,
-geometrycentral::surface::VertexData<double>& theta2,
-const M_Poly_Curve& strain_curve,
-const M_Poly_Curve& moduls_curve,
-const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
-const std::vector<int>& fixedIdx,
-int max_iters,
-double lim,
-double wM,
-double wL,
-double E,
-double nu,
-double h,
-double w_s,
-double w_b,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
