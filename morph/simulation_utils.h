@@ -1,15 +1,33 @@
 #pragma once
 
 #include <Eigen/SparseCore>
+#include <Eigen/Core>
 #include <algorithm>
 #include <cmath>
 
-namespace geometrycentral { namespace surface { class IntrinsicGeometryInterface; } }
+#include <geometrycentral/surface/intrinsic_geometry_interface.h>
+#include <geometrycentral/surface/surface_mesh.h>
 
 /// Build the lumped vertex mass vector used by SGN distance metric
 /// (size = 3 * nV, repeated triple per vertex, normalised by total area).
 /// geometry must own a mesh; requireFaceAreas / requireVertexIndices are called.
 Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry);
+
+/// Per-face diagonal mass matrix used by the kappa regulariser (OptKap).
+/// Entry i = 0.5 / det(MrInv[f_i]).
+Eigen::SparseMatrix<double>
+computeFaceMassKappa(geometrycentral::surface::SurfaceMesh& mesh,
+                     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv);
+
+/// Per-face diagonal mass matrix used by the lambda regulariser (OptLam).
+/// Entry i = faceAreas[f_i].
+Eigen::SparseMatrix<double>
+computeFaceMassLambda(geometrycentral::surface::IntrinsicGeometryInterface& geometry);
+
+/// Uniform-weight dual-graph Laplacian on the face-face graph (boundary edges
+/// excluded).  Shared by both OptKap and OptLam regularisers.
+Eigen::SparseMatrix<double>
+computeFaceDualLaplacian(geometrycentral::surface::SurfaceMesh& mesh);
 
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size);
 

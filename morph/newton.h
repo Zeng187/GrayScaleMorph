@@ -40,6 +40,7 @@ const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
 geometrycentral::surface::FaceData<double>& theta1,
 geometrycentral::surface::FaceData<double>& theta2,
 const Eigen::VectorXd& masses,
+double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const std::vector<int>& fixedIdx,
 int max_iters,
@@ -54,6 +55,7 @@ double w_b,
 const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
+double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -85,6 +87,7 @@ const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
 geometrycentral::surface::FaceData<double>& theta1,
 geometrycentral::surface::FaceData<double>& theta2,
 const Eigen::VectorXd& masses,
+double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const std::vector<int>& fixedIdx,
 int max_iters,
@@ -99,6 +102,7 @@ double w_b,
 const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
+double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -132,6 +136,7 @@ const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
 geometrycentral::surface::FaceData<double>& theta1,
 geometrycentral::surface::FaceData<double>& theta2,
 const Eigen::VectorXd& masses,
+double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
 const std::vector<int>& fixedIdx,
@@ -148,6 +153,7 @@ double w_b,
 const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
+double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -204,6 +210,7 @@ const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
 geometrycentral::surface::FaceData<double>& theta1,
 geometrycentral::surface::FaceData<double>& theta2,
 const Eigen::VectorXd& masses,
+double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
 const std::vector<int>& fixedIdx,
@@ -220,6 +227,7 @@ double w_b,
 const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
+double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 

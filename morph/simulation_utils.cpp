@@ -7,6 +7,7 @@
 #include<igl/boundary_loop.h>
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 #include <geometrycentral/surface/surface_mesh.h>
+#include <vector>
 
 Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry)
 {
@@ -31,6 +32,74 @@ Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryI
   }
   masses /= totalArea;
   return masses;
+}
+
+Eigen::SparseMatrix<double>
+computeFaceMassKappa(geometrycentral::surface::SurfaceMesh& mesh,
+                     const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv)
+{
+  using namespace geometrycentral::surface;
+  const int nF = static_cast<int>(mesh.nFaces());
+  Eigen::SparseMatrix<double> M(nF, nF);
+  M.reserve(nF);
+  int iF = 0;
+  for (Face f : mesh.faces())
+  {
+    M.insert(iF, iF) = 0.5 / MrInv[f].determinant();
+    ++iF;
+  }
+  return M;
+}
+
+Eigen::SparseMatrix<double>
+computeFaceMassLambda(geometrycentral::surface::IntrinsicGeometryInterface& geometry)
+{
+  using namespace geometrycentral::surface;
+  geometry.requireFaceAreas();
+  SurfaceMesh& mesh = geometry.mesh;
+  const int nF = static_cast<int>(mesh.nFaces());
+  Eigen::SparseMatrix<double> M(nF, nF);
+  M.reserve(nF);
+  int iF = 0;
+  for (Face f : mesh.faces())
+  {
+    M.insert(iF, iF) = geometry.faceAreas[f];
+    ++iF;
+  }
+  return M;
+}
+
+Eigen::SparseMatrix<double>
+computeFaceDualLaplacian(geometrycentral::surface::SurfaceMesh& mesh)
+{
+  using namespace geometrycentral::surface;
+  const int nF = static_cast<int>(mesh.nFaces());
+
+  FaceData<size_t> faceIdx(mesh);
+  size_t cnt = 0;
+  for (Face f : mesh.faces()) faceIdx[f] = cnt++;
+
+  std::vector<Eigen::Triplet<double>> trips;
+  trips.reserve(mesh.nEdges() * 4);
+  std::vector<double> diag(nF, 0.0);
+
+  for (Edge e : mesh.edges())
+  {
+    if (e.isBoundary()) continue;
+    Halfedge he = e.halfedge();
+    size_t i = faceIdx[he.face()];
+    size_t j = faceIdx[he.twin().face()];
+    trips.emplace_back(static_cast<int>(i), static_cast<int>(j), -1.0);
+    trips.emplace_back(static_cast<int>(j), static_cast<int>(i), -1.0);
+    diag[i] += 1.0;
+    diag[j] += 1.0;
+  }
+  for (int i = 0; i < nF; ++i)
+    trips.emplace_back(i, i, diag[i]);
+
+  Eigen::SparseMatrix<double> L(nF, nF);
+  L.setFromTriplets(trips.begin(), trips.end());
+  return L;
 }
 
 Eigen::SparseMatrix<double> projectionMatrix(const std::vector<int>& fixedIdx, int size)

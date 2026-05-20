@@ -153,6 +153,13 @@ int main(int /*argc*/, char * /*argv*/[])
     // from the exact same weights.
     const Eigen::VectorXd masses = computeVertexMasses(geometry);
 
+    // Face-space matrices used to build the *other-variable* regulariser as a
+    // constant offset, so the SPN energy printed by the OptKap/OptLam stages
+    // share the same formula:  distance + kappa_reg + lambda_reg.
+    const Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
+    const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
+    const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
+
     spdlog::info("Step 4: Inverse Design.");
 
     double wP_kap = config.RuntimeSetting.wP_kap;
@@ -175,6 +182,20 @@ int main(int /*argc*/, char * /*argv*/[])
     double penalty_kap = 0.0;
     double penalty_lam = 0.0;
 
+    // Regularisation accumulators kept in sync between stages so each SGN call
+    // receives the *other* variable's regulariser as a constant offset.
+    auto computeKappaReg = [&]() {
+        const Eigen::VectorXd k = kappa_pf_s.toVector();
+        return wM_kap * k.dot(M_kappa * k) + wL_kap * k.dot(L_face * k);
+    };
+    auto computeLambdaReg = [&]() {
+        const Eigen::VectorXd l = lambda_pf_s.toVector();
+        return wM_lam * l.dot(M_lambda * l) + wL_lam * l.dot(L_face * l);
+    };
+    double kappa_reg = computeKappaReg();
+    double lambda_reg = computeLambdaReg();
+    double self_reg = 0.0;
+
     while (k < stage_iter)
     {
 
@@ -185,10 +206,12 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptKap Start ----------------------------\n", k);
 
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
+        Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
+                                                       adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy);
+                                                       distance, spn_energy, self_reg);
+        kappa_reg = self_reg;  // sync for the next OptLam call
 
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
@@ -203,10 +226,12 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptLam Start ----------------------------\n", k);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
+        Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
+                                                       adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy);
+                                                       distance, spn_energy, self_reg);
+        lambda_reg = self_reg;  // sync for the next OptKap call
 
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
