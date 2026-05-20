@@ -236,6 +236,28 @@ int main(int /*argc*/, char * /*argv*/[])
         return d2;
     };
 
+    // Re-run forward Newton on the current (P, lambda, kappa) state and
+    // recompute mass-weighted distance.  Updates `Vr` in place so the next
+    // SGN call starts from the new equilibrium.  Used after the P-update
+    // sub-stage where MrInv changed and Vr is no longer in equilibrium.
+    auto recomputeForwardState = [&]() -> double
+    {
+        auto simFunc = simulationFunction(geometry, MrInv, lambda_pf_s, kappa_pf_s,
+                                          E, nu, ac.thickness,
+                                          config.RuntimeSetting.w_s,
+                                          config.RuntimeSetting.w_b, ref_faces);
+        newton(geometry, Vr, simFunc,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        double d2 = 0.0;
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                double d = Vr(i, j) - targetV(i, j);
+                d2 += masses(3 * i + j) * d * d;
+            }
+        return d2;
+    };
+
     // One-line stage stats: SPN energy -> Distance -> Projected distance -> Penalties.
     auto printStageStats = [&]()
     {
@@ -309,9 +331,18 @@ int main(int /*argc*/, char * /*argv*/[])
             // Refresh P-dependent quantities.
             MrInv = precomputeMrInv(mesh, P, F);
             M_kappa = computeFaceMassKappa(mesh, MrInv);
-            std::cout << "[P-update] stage " << k
+
+            // Re-run forward sim with the updated MrInv so Vr is back at
+            // equilibrium, then refresh reg accumulators (M_kappa changed).
+            distance = recomputeForwardState();
+            kappa_reg = computeKappaReg();
+            lambda_reg = computeLambdaReg();
+            spn_energy = distance + kappa_reg + lambda_reg;
+
+            std::cout << "[OptP finish] stage " << k
                       << ": lambda range [" << lambdaVec.minCoeff()
-                      << ", " << lambdaVec.maxCoeff() << "]\n";
+                      << ", " << lambdaVec.maxCoeff() << "]  ";
+            printStageStats();
         }
         // -------------------------------------------------------------------
 
