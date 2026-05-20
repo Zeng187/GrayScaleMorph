@@ -321,7 +321,7 @@ int main(int /*argc*/, char * /*argv*/[])
 
     // ---- Warm-up: pure-SPN SGN (no penalty) so distance/projected-distance
     //      drop into a sensible basin before MGDA wakes Phi as 2nd objective.
-    const int warmup_stages = 1;
+    const int warmup_stages = config.RuntimeSetting.warmup_stages;
     for (int kw = 0; kw < warmup_stages; ++kw) {
         printf("============================ Warmup stage %d (pure SPN) ============================\n", kw);
         std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap
@@ -446,14 +446,6 @@ int main(int /*argc*/, char * /*argv*/[])
         // -------------------------------------------------------------------
 
         k++;
-
-        // MGDA termination: both stages reached Pareto criticality.
-        if (pareto_kap < config.RuntimeSetting.epsilon &&
-            pareto_lam < config.RuntimeSetting.epsilon)
-        {
-            std::cout << "[MGDA] both stages Pareto-critical, stopping at k=" << k << "\n";
-            break;
-        }
 
         printf("----------------------------------------------------------------------------------------------------------------------\n");
     }

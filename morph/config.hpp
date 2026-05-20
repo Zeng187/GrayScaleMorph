@@ -69,6 +69,7 @@ public:
         double betaP;
         bool   snap_before_P;
         int    stage_iter;
+        int    warmup_stages;
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

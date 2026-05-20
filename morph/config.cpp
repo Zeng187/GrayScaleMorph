@@ -89,6 +89,7 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P", nlohmann::json::array({false}))[0];
     RuntimeSetting.stage_iter         = rt.value("stage_iter",    nlohmann::json::array({5}))[0];
+    RuntimeSetting.warmup_stages      = rt.value("warmup_stages", nlohmann::json::array({1}))[0];
 }
 
 std::string Config::materialJsonPath() const

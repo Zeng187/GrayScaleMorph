@@ -325,7 +325,7 @@ int main(int /*argc*/, char* /*argv*/[])
         };
 
         // ---- Warm-up: pure-SPN SGN (no penalty) ----
-        const int warmup_stages = 1;
+        const int warmup_stages = config.RuntimeSetting.warmup_stages;
         for (int kw = 0; kw < warmup_stages; ++kw) {
             printf("============================ patch %zu Warmup stage %d (pure SPN) ============================\n",
                    pd.idx, kw);
@@ -448,15 +448,6 @@ int main(int /*argc*/, char* /*argv*/[])
             // -------------------------------------------------------------------
 
             k++;
-
-            // MGDA termination: both stages reached Pareto criticality.
-            if (pareto_kap < config.RuntimeSetting.epsilon &&
-                pareto_lam < config.RuntimeSetting.epsilon)
-            {
-                std::cout << "[MGDA] patch " << pd.idx
-                          << " both stages Pareto-critical, stopping at k=" << k << "\n";
-                break;
-            }
 
             printf("--------------------------------------------------------------------------\n");
         }
