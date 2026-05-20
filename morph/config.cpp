@@ -69,7 +69,7 @@ Config::Config(const std::string& filePath) {
     auto& m = j["Model"];
     ModelSetting.ModelName    = m["ModelName"][0];
     ModelSetting.Postfix      = m.value("Postfix",      json::array({".obj"}))[0];
-    ModelSetting.MaterialName = m.value("MaterialName", json::array({"grayscale-material"}))[0];
+    ModelSetting.MaterialName = m.value("MaterialName", json::array({"largedeform-material"}))[0];
     ModelSetting.DesignName   = m.value("DesignName",   json::array({""}))[0];
 
     // -------- Runtime hyperparameters --------

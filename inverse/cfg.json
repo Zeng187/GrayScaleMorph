@@ -2,7 +2,7 @@
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
 		"ModelName":    [ "hemisphere" ],
-		"MaterialName": [ "grayscale-material" ],
+		"MaterialName": [ "largedeform-material" ],
 		"Postfix":      [ ".obj" ]
 	},
 	"RuntimeSettings": {
