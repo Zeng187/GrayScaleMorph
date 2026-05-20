@@ -347,7 +347,14 @@ int main(int argc, char* argv[])
             // -- Lambda-aware ARAP P-update --
             {
                 Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
-                Eigen::VectorXd sTarget   = 1.0 / lambdaVec.array();
+                // Clamp lambda to a safe positive range before inverting so a
+                // pathological zero/negative lambda from SGN cannot push
+                // sTarget to inf/nan and trash the sparse factorisation.
+                for (int ii = 0; ii < lambdaVec.size(); ++ii) {
+                    if (!std::isfinite(lambdaVec(ii)) || lambdaVec(ii) < 1e-3)
+                        lambdaVec(ii) = 1e-3;
+                }
+                Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
                 Eigen::MatrixX2d P_2d = P;
                 paramSolver.solve(P_2d, sTarget, sTarget, 10);
                 P = P_2d;
