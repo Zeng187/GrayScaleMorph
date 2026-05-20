@@ -137,12 +137,10 @@ Eigen::Matrix2d LocalGlobalSolver::project(const Eigen::Matrix2d& M, double sMin
   stressX.row(i) = svd.matrixU().col(0);
   stressY.row(i) = svd.matrixU().col(1);
 
-
-  // S(1, 1) = sMin;
-  // S(0, 0) = sMax;
   double s_avg = 0.5 * (s1(i) + s2(i));
   s_avg = std::clamp(s_avg, sMin, sMax);
    S(1, 1) = S(0, 0) = s_avg;
+  // S(1, 1) = S(0, 0) = 1.0;
 
   return svd.matrixU() * S * svd.matrixV().transpose();
 }

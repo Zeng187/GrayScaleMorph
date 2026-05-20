@@ -20,6 +20,6 @@
 		"wP_kap": [ 0.0 ],
 		"wP_lam": [ 0.0 ],
 		"penalty_threshold": [ 0.01 ],
-		"betaP": [ 50 ]
+		"betaP": [ 100 ]
 	}
 }
