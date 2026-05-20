@@ -372,14 +372,26 @@ int main(int argc, char* argv[])
                              lambdaVec.minCoeff(), lambdaVec.maxCoeff());
             }
 
-            // -- Trust-region safeguard: accept / reject this stage --
+            // -- Trust-region safeguard --
+            //
+            // Snapshot update is decoupled from accept/reject:
+            //   * best snapshot updates iff proj_new < proj_best, so
+            //     `proj_best` strictly tracks the historical minimum.
+            //   * reject (revert all state + shrink wP growth) still uses
+            //     the "both worsen" rule the user originally specified.
+            //
+            // Otherwise (dist improves but proj worsens) we ACCEPT the
+            // step and let SGN keep advancing, but the best snapshot
+            // intentionally does *not* drift to a worse-proj state.  This
+            // way the post-loop restore guarantees the final manufacturing
+            // distance equals the historical minimum proj.
             const double dist_new = distance;
             const double proj_new = computeProjectedDistance();
-            const bool reject     = (dist_new > dist_best) && (proj_new > proj_best);
 
-            if (!reject) {
-                dist_best       = dist_new;
+            const bool snapshot_improves = (proj_new < proj_best);
+            if (snapshot_improves) {
                 proj_best       = proj_new;
+                dist_best       = dist_new;
                 Vr_best         = Vr;
                 lambda_pf_best  = lambda_pf_s;
                 kappa_pf_best   = kappa_pf_s;
@@ -391,8 +403,10 @@ int main(int argc, char* argv[])
                 wP_kap_best     = wP_kap;   wP_lam_best = wP_lam;
                 kappa_reg_best  = kappa_reg;
                 lambda_reg_best = lambda_reg;
-                spdlog::info("Patch {} Stage {} [ACCEPT] dist={:.6f} proj={:.6f}", pd.idx, k, dist_new, proj_new);
-            } else {
+            }
+
+            const bool reject = (dist_new > dist_best) && (proj_new > proj_best);
+            if (reject) {
                 Vr          = Vr_best;
                 lambda_pf_s = lambda_pf_best;
                 kappa_pf_s  = kappa_pf_best;
@@ -407,6 +421,12 @@ int main(int argc, char* argv[])
                 wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
                 spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor -> {:.6f}",
                              pd.idx, k, dist_new, dist_best, proj_new, proj_best, wP_growth_factor);
+            } else if (snapshot_improves) {
+                spdlog::info("Patch {} Stage {} [ACCEPT, best updated] dist={:.6f} proj={:.6f} (best now)",
+                             pd.idx, k, dist_new, proj_new);
+            } else {
+                spdlog::info("Patch {} Stage {} [ACCEPT, best unchanged] dist={:.6f} proj={:.6f} (best proj still {:.6f})",
+                             pd.idx, k, dist_new, proj_new, proj_best);
             }
 
             k++;
@@ -419,6 +439,18 @@ int main(int argc, char* argv[])
             kappa_reg  = computeKappaReg();
             lambda_reg = computeLambdaReg();
         }
+
+        // After the stage loop, restore the best snapshot so the downstream
+        // material output / proj.obj is guaranteed to reflect the historical
+        // minimum projected distance, not the last (possibly worse) state.
+        Vr          = Vr_best;
+        lambda_pf_s = lambda_pf_best;
+        kappa_pf_s  = kappa_pf_best;
+        P           = P_best;
+        MrInv       = MrInv_best;
+        M_kappa     = M_kappa_best;
+        spdlog::info("Patch {} restored best snapshot: dist={:.6f}  proj={:.6f}",
+                     pd.idx, dist_best, proj_best);
 
 
 #else

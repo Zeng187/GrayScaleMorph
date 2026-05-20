@@ -402,48 +402,46 @@ int main(int /*argc*/, char * /*argv*/[])
         // -------------------------------------------------------------------
 
         // ---- Trust-region safeguard: accept / reject this stage -----------
-        const double dist_new = distance;                      // continuous (after P-update)
-        const double proj_new = computeProjectedDistance();    // snap-then-forward
-        const bool reject     = (dist_new > dist_best) && (proj_new > proj_best);
+        // Trust-region safeguard:
+        //   * best snapshot updates iff proj_new < proj_best, so
+        //     `proj_best` strictly tracks historical minimum proj
+        //   * reject (revert + shrink wP growth) only fires when BOTH dist
+        //     and proj worsen (matches the user's original spec)
+        //   * post-loop restore guarantees final outputs reflect the
+        //     historical-best snapshot
+        const double dist_new = distance;
+        const double proj_new = computeProjectedDistance();
 
-        if (!reject)
+        const bool snapshot_improves = (proj_new < proj_best);
+        if (snapshot_improves)
         {
-            // ACCEPT: snapshot becomes the current state.
-            dist_best       = dist_new;
             proj_best       = proj_new;
+            dist_best       = dist_new;
             Vr_best         = Vr;
             lambda_pf_best  = lambda_pf_s;
             kappa_pf_best   = kappa_pf_s;
             P_best          = P;
             MrInv_best      = MrInv;
             M_kappa_best    = M_kappa;
-            wM_kap_best     = wM_kap;
-            wL_kap_best     = wL_kap;
-            wM_lam_best     = wM_lam;
-            wL_lam_best     = wL_lam;
-            wP_kap_best     = wP_kap;
-            wP_lam_best     = wP_lam;
+            wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
+            wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
+            wP_kap_best     = wP_kap;   wP_lam_best = wP_lam;
             kappa_reg_best  = kappa_reg;
             lambda_reg_best = lambda_reg;
-            std::cout << "[ACCEPT] stage " << k
-                      << ": dist=" << dist_new << "  proj=" << proj_new
-                      << "  (best updated)\n";
         }
-        else
+
+        const bool reject = (dist_new > dist_best) && (proj_new > proj_best);
+        if (reject)
         {
-            // REJECT: revert everything to the best snapshot, halve wP growth.
             Vr          = Vr_best;
             lambda_pf_s = lambda_pf_best;
             kappa_pf_s  = kappa_pf_best;
             P           = P_best;
             MrInv       = MrInv_best;
             M_kappa     = M_kappa_best;
-            wM_kap      = wM_kap_best;
-            wL_kap      = wL_kap_best;
-            wM_lam      = wM_lam_best;
-            wL_lam      = wL_lam_best;
-            wP_kap      = wP_kap_best;
-            wP_lam      = wP_lam_best;
+            wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
+            wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
+            wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
             wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
@@ -452,6 +450,18 @@ int main(int /*argc*/, char * /*argv*/[])
                       << " AND proj=" << proj_new << ">" << proj_best
                       << "; revert, wP_growth_factor -> " << wP_growth_factor
                       << " (next wP *= " << (1.0 + wP_growth_factor) << ")\n";
+        }
+        else if (snapshot_improves)
+        {
+            std::cout << "[ACCEPT, best updated] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << " (best now)\n";
+        }
+        else
+        {
+            std::cout << "[ACCEPT, best unchanged] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << " (best proj still " << proj_best << ")\n";
         }
         // -------------------------------------------------------------------
 
@@ -480,11 +490,18 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------------------------------------------------------------------------------------------------\n");
     }
 
-    // Stage loop exited.  If the last stage was REJECTED, the state was
-    // already reverted to the best snapshot above; if it was ACCEPTED, the
-    // snapshot equals the current state.  Either way Vr / lambda_pf_s /
-    // kappa_pf_s already hold the best material design for downstream
-    // material output and final projected forward-sim.
+    // Stage loop exited.  Restore the best snapshot explicitly so the
+    // downstream material projection / final proj.obj is guaranteed to be
+    // the historical-minimum-projected-distance design — independent of
+    // whether the last stage's snapshot got updated.
+    Vr          = Vr_best;
+    lambda_pf_s = lambda_pf_best;
+    kappa_pf_s  = kappa_pf_best;
+    P           = P_best;
+    MrInv       = MrInv_best;
+    M_kappa     = M_kappa_best;
+    std::cout << "Restored best snapshot: dist=" << dist_best
+              << "  proj=" << proj_best << "\n";
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
