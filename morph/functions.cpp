@@ -825,8 +825,9 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
   const double alpha = E * nu / (1 - nu * nu);
   const double beta = E / (2 * (1 + nu));
 
+  // Variables: [x (3|V|), kappa (|F|)] — kappa is per-face.
   TinyAD::ScalarFunction<1, double, Eigen::Index> func =
-      TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nVertices()));
+      TinyAD::scalar_function<1>(TinyAD::range(3 * mesh.nVertices() + mesh.nFaces()));
 
   // 1st fundamental form
   func.add_elements<9>(TinyAD::range(F.rows()),
@@ -860,7 +861,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
 
   geometry.requireVertexIndices();
 
-  func.add_elements<3 * 6 + 3>(
+  func.add_elements<3 * 6 + 1>(
       TinyAD::range(F.rows()),
       [&, alpha, beta, E, nu, h, w_s, w_b, lambda, ref_faces](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
@@ -881,11 +882,8 @@ TinyAD::ScalarFunction<1, double, Eigen::Index> adjointFunction_FixLam_OptKap(In
         Face f = mesh.face(f_idx);
         Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
 
-        Eigen::Vector3<T> kappa_f;
-        kappa_f << element.variables(3 * mesh.nVertices() + F(f_idx, 0)),
-            element.variables(3 * mesh.nVertices() + F(f_idx, 1)),
-            element.variables(3 * mesh.nVertices() + F(f_idx, 2));
-        T kap = (kappa_f(0) + kappa_f(1) + kappa_f(2)) / 3;
+        // Per-face kappa: single variable at vars[3|V| + f_idx]
+        T kap = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
 
         T lam = T(lambda[f]);
         T lam_sqr = lam * lam;
@@ -1054,7 +1052,7 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
                                const Eigen::MatrixXi &F,
                                const FaceData<Eigen::Matrix2d> &MrInv,
-                               const VertexData<double> &kappa, // FixKap: 仍然是 per-vertex
+                               const FaceData<double> &kappa, // FixKap: per-face constant
                                double E,
                                double nu,
                                double h,
@@ -1145,9 +1143,7 @@ adjointFunction_FixKap_OptLam2(IntrinsicGeometryInterface &geometry,
         T lam = element.variables(3 * mesh.nVertices() + f_idx)(0, 0);
         T lam_sqr = lam * lam;
 
-        T kap = 0.0;
-        for (Vertex v : f.adjacentVertices())
-          kap += kappa[v] / 3;
+        T kap = T(kappa[f]);
 
         Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2d::Identity();
         Eigen::Matrix2<T> Egreen = (Ff.transpose() * L * Ff) - b_bar;

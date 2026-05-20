@@ -113,7 +113,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     const Eigen::MatrixXd& initV,
                                     const FaceData<Eigen::Matrix2d>& MrInv,
                                     FaceData<double>& theta1,
-                                    VertexData<double>& theta2,
+                                    FaceData<double>& theta2,
                                     const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                     const std::vector<int>& fixedIdx,
                                     int max_iters,
@@ -128,8 +128,6 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
-  geometry.requireCotanLaplacian();
-  geometry.requireVertexLumpedMassMatrix();
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
 
@@ -152,13 +150,44 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
   }
   masses /= totalArea;
 
-  Eigen::SparseMatrix<double> L = geometry.cotanLaplacian;
+  // Per-face regularization for theta2 (kappa, |F|)
+  const size_t nF = mesh.nFaces();
 
-  // Mass matrix theta
-  Eigen::SparseMatrix<double> M_theta(targetV.rows(), targetV.rows());
-  M_theta.reserve(targetV.rows());
-  for(int i = 0; i < targetV.rows(); ++i)
-    M_theta.insert(i, i) = totalArea * masses(3 * i);
+  // Diagonal mass matrix on faces (flat-area-weighted)
+  Eigen::SparseMatrix<double> M_theta(nF, nF);
+  M_theta.reserve(nF);
+  {
+    size_t iF = 0;
+    for(Face f : mesh.faces())
+    {
+      M_theta.insert(iF, iF) = 0.5 / MrInv[f].determinant();
+      ++iF;
+    }
+  }
+
+  // Face-dual graph Laplacian (uniform weights)
+  Eigen::SparseMatrix<double> L(nF, nF);
+  {
+    FaceData<size_t> faceIdx(mesh);
+    size_t cnt = 0;
+    for(Face f : mesh.faces()) faceIdx[f] = cnt++;
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(mesh.nEdges() * 4);
+    std::vector<double> diag(nF, 0.0);
+    for(Edge e : mesh.edges())
+    {
+      if(e.isBoundary()) continue;
+      Halfedge he = e.halfedge();
+      size_t i = faceIdx[he.face()];
+      size_t j = faceIdx[he.twin().face()];
+      trips.emplace_back((int)i, (int)j, -1.0);
+      trips.emplace_back((int)j, (int)i, -1.0);
+      diag[i] += 1.0; diag[j] += 1.0;
+    }
+    for(size_t i = 0; i < nF; ++i)
+      trips.emplace_back((int)i, (int)i, diag[i]);
+    L.setFromTriplets(trips.begin(), trips.end());
+  }
 
   Eigen::VectorXd theta = theta2.toVector();
   Eigen::VectorXd xTarget(targetV.size());
@@ -178,13 +207,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
-    //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) +  wL * th.dot(L * th);
-    //return (x - xTarget).cwiseProduct(x - xTarget).maxCoeff();
-    //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
-    //return (x - xTarget).dot(x - xTarget) / targetV.rows();
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th);
-    //return (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
-    //return (x - xTarget).dot(x - xTarget) + wM * th.dot(M_theta * th) + wL * th.dot(L * th);
   };
 
   // Build matrix P
@@ -288,8 +311,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -492,8 +516,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -522,7 +547,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   const Eigen::MatrixXd& initV,
                                   const FaceData<Eigen::Matrix2d>& MrInv,
                                   FaceData<double>& theta1,
-                                  VertexData<double>& theta2,
+                                  FaceData<double>& theta2,
                                   const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                   const std::vector<int>& fixedIdx,
                                   int max_iters,
@@ -575,7 +600,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
   // Simple face graph Laplacian (uniform weights on dual graph)
   // NOTE: If you have better weights (shared-edge length, dihedral, etc.), replace w=1.0.
-  Eigen::SparseMatrix<double> L_theta(nF, nF);
+  Eigen::SparseMatrix<double> L(nF, nF);
   {
     FaceData<size_t> faceIdx(mesh);
     size_t cnt = 0;
@@ -606,7 +631,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     for(size_t i = 0; i < nF; ++i)
       trips.emplace_back((int)i, (int)i, diag[i]);
 
-    L_theta.setFromTriplets(trips.begin(), trips.end());
+    L.setFromTriplets(trips.begin(), trips.end());
   }
 
   // theta is now size |F|
@@ -636,7 +661,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     // data term + face regularization
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
            + wM * th.dot(M_theta * th)
-           + wL * th.dot(L_theta * th);
+           + wL * th.dot(L * th);
   };
 
   // Build matrix P (still for fixed vertex positions in x)
@@ -649,8 +674,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
   Eigen::SparseMatrix<double> H = adjointFunc.eval_hessian(X);
 
-  // Build HGN matrix (replace vertex L by face L_theta)
-  Eigen::SparseMatrix<double> HGN = buildHGN(2 * masses, P, 2 * wM * M_theta + 2 * wL * L_theta, H);
+  // Build HGN matrix (replace vertex L by face L)
+  Eigen::SparseMatrix<double> HGN = buildHGN(2 * masses, P, 2 * wM * M_theta + 2 * wL * L, H);
 
   auto distanceGrad = [&](const Eigen::VectorXd& th) -> Eigen::VectorXd {
     Eigen::VectorXd X(targetV.size() + th.size());
@@ -688,7 +713,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     // gradient wrt theta (size |F|) + regularization
     return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
            + 2 * wM * M_theta * th
-           + 2 * wL * L_theta * th;
+           + 2 * wL * L * th;
   };
 
   double energy = distance(theta);
@@ -746,8 +771,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     theta += s * deltaTheta;
 
-    std::cout << "Decrement in iteration " << i << ": "
-              << TinyAD::newton_decrement(deltaTheta, g)
+    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
               << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
               << "\tStep size: " << s << std::endl;
 
@@ -958,8 +983,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -1161,8 +1187,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -1190,7 +1217,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     const Eigen::MatrixXd& initV,
                                     const FaceData<Eigen::Matrix2d>& MrInv,
                                     FaceData<double>& theta1,
-                                    VertexData<double>& theta2,
+                                    FaceData<double>& theta2,
                                     const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                     const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
                                     const std::vector<int>& fixedIdx,
@@ -1207,8 +1234,6 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     const std::vector<int>& ref_faces,
                                     const std::function<void(const Eigen::VectorXd&)>& callback)
 {
-  geometry.requireCotanLaplacian();
-  geometry.requireVertexLumpedMassMatrix();
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
 
@@ -1231,13 +1256,42 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   }
   masses /= totalArea;
 
-  Eigen::SparseMatrix<double> L = geometry.cotanLaplacian;
+  // Per-face regularization for theta2 (kappa, |F|)
+  const size_t nF = mesh.nFaces();
 
-  // Mass matrix theta
-  Eigen::SparseMatrix<double> M_theta(targetV.rows(), targetV.rows());
-  M_theta.reserve(targetV.rows());
-  for(int i = 0; i < targetV.rows(); ++i)
-    M_theta.insert(i, i) = totalArea * masses(3 * i);
+  Eigen::SparseMatrix<double> M_theta(nF, nF);
+  M_theta.reserve(nF);
+  {
+    size_t iF = 0;
+    for(Face f : mesh.faces())
+    {
+      M_theta.insert(iF, iF) = 0.5 / MrInv[f].determinant();
+      ++iF;
+    }
+  }
+
+  Eigen::SparseMatrix<double> L(nF, nF);
+  {
+    FaceData<size_t> faceIdx(mesh);
+    size_t cnt = 0;
+    for(Face f : mesh.faces()) faceIdx[f] = cnt++;
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(mesh.nEdges() * 4);
+    std::vector<double> diag(nF, 0.0);
+    for(Edge e : mesh.edges())
+    {
+      if(e.isBoundary()) continue;
+      Halfedge he = e.halfedge();
+      size_t i = faceIdx[he.face()];
+      size_t j = faceIdx[he.twin().face()];
+      trips.emplace_back((int)i, (int)j, -1.0);
+      trips.emplace_back((int)j, (int)i, -1.0);
+      diag[i] += 1.0; diag[j] += 1.0;
+    }
+    for(size_t i = 0; i < nF; ++i)
+      trips.emplace_back((int)i, (int)i, diag[i]);
+    L.setFromTriplets(trips.begin(), trips.end());
+  }
 
   Eigen::VectorXd theta = theta2.toVector();
   Eigen::VectorXd xTarget(targetV.size());
@@ -1366,8 +1420,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -1571,8 +1626,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -1599,7 +1655,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           const Eigen::MatrixXd& initV,
                                                           const FaceData<Eigen::Matrix2d>& MrInv,
                                                           FaceData<double>& theta1,   // <-- FaceData lam
-                                                          VertexData<double>& theta2, // FixKap: kappa (仍按你们原逻辑)
+                                                          FaceData<double>& theta2,   // FixKap: per-face kappa constant
                                                           const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
                                                           const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
                                                           const std::vector<int>& fixedIdx,
@@ -1657,7 +1713,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   }
 
   // Uniform dual-graph Laplacian on faces (replace with your weighted version if desired)
-  Eigen::SparseMatrix<double> L_theta(nF, nF);
+  Eigen::SparseMatrix<double> L(nF, nF);
   {
     FaceData<int> faceIdx(mesh);
     int cnt = 0;
@@ -1689,7 +1745,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     for(int i = 0; i < nF; ++i)
       trips.emplace_back(i, i, diag[i]);
 
-    L_theta.setFromTriplets(trips.begin(), trips.end());
+    L.setFromTriplets(trips.begin(), trips.end());
   }
 
   // ----------------------------
@@ -1723,7 +1779,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
            + wM * th.dot(M_theta * th)
-           + wL * th.dot(L_theta * th)
+           + wL * th.dot(L * th)
            + wP * qp;
   };
 
@@ -1741,7 +1797,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   Eigen::SparseMatrix<double> qH = penaltyFunc.eval_hessian(theta);
 
   Eigen::SparseMatrix<double> HGN =
-      buildHGN(2 * masses, P, 2 * wM * M_theta + 2 * wL * L_theta, H);
+      buildHGN(2 * masses, P, 2 * wM * M_theta + 2 * wL * L, H);
 
   auto distanceGrad = [&](const Eigen::VectorXd& th) -> Eigen::VectorXd {
     Eigen::VectorXd X(targetV.size() + th.size());
@@ -1780,7 +1836,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
            + 2 * wM * M_theta * th
-           + 2 * wL * L_theta * th
+           + 2 * wL * L * th
            + wP * qg;
   };
 
@@ -1803,7 +1859,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     // rebuild HGN with extra theta-theta term from penalty
     HGN = buildHGN(2 * masses, P,
-                   2 * wM * M_theta + 2 * wL * L_theta + wP * qH,
+                   2 * wM * M_theta + 2 * wL * L + wP * qH,
                    H);
 
     if(i == 0)
@@ -1844,8 +1900,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     theta += s * deltaTheta;
 
-    std::cout << "Decrement in iteration " << i << ": "
-              << TinyAD::newton_decrement(deltaTheta, g)
+    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
               << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
               << "\tStep size: " << s << std::endl;
 
@@ -2058,8 +2114,9 @@ Eigen::MatrixXd sparse_gauss_newton_lay1(IntrinsicGeometryInterface& geometry,
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -2258,8 +2315,9 @@ Eigen::MatrixXd sparse_gauss_newton_lay2(IntrinsicGeometryInterface& geometry,
     theta += s * deltaTheta;
 
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << "\tStep size: " << s
-              << std::endl;
+              << "\tSPN energy: " << ((x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta))
+              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tStep size: " << s << std::endl;
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 

@@ -175,14 +175,13 @@ int main(int argc, char* argv[])
         Morphmesh::SetMorphophing(morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
             morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t,
             morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
-            morph_mesh.kappa_pv_s, morph_mesh.kappa_pf_s);
+            morph_mesh.kappa_pf_s, morph_mesh.kappa_pf_s);
 
         // Mirror physical-unit target into morph_dir so {targ, inv} sit side-by-side.
         igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_targ.obj", V, F);
 
 
         VertexData<double> lambda_pv_s(mesh, morph_mesh.lambda_pv_s);
-        VertexData<double> kappa_pv_s(mesh, morph_mesh.kappa_pv_s);
         FaceData<double> lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
         FaceData<double> kappa_pf_s(mesh, morph_mesh.kappa_pf_s);
 
@@ -197,7 +196,7 @@ int main(int argc, char* argv[])
         double penalty_threshold = config.RuntimeSetting.penalty_threshold;
         double betaP = config.RuntimeSetting.betaP;
         auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
-        auto penalty_to_kapp = MaterialPenaltyFunctionPerV(geometry, ac.feasible_kapp, betaP);
+        auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
         auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
         int stage_iter = 5;
@@ -217,12 +216,12 @@ int main(int argc, char* argv[])
         {
             spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
+            Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
             distance = (Vr - targetV).squaredNorm() / nV;
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pv_s.toVector(),true);
+            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
             spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                          pd.idx, k, distance, penalty_kap, penalty_lam);
@@ -230,13 +229,13 @@ int main(int argc, char* argv[])
 
 
             spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
-            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
+            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
             distance = (Vr - targetV).squaredNorm() / nV;
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pv_s.toVector(),true);
+            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
             spdlog::info("Patch {} Stage {}, OptLam finish- Distance: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
                          pd.idx, k, distance, penalty_kap, penalty_lam);
@@ -247,9 +246,7 @@ int main(int argc, char* argv[])
                 FaceData<double> lambda_pf_proj(mesh);
 
                 for (Face f : mesh.faces()) {
-                    double sum = 0.0; int cnt = 0;
-                    for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
-                    double kap = sum / cnt;
+                    double kap = kappa_pf_s[f];
                     double lam = lambda_pf_s[f];
                     int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
                     kappa_pf_proj[f] = ac.feasible_kapp[idx];
@@ -287,7 +284,7 @@ int main(int argc, char* argv[])
             spdlog::info("Patch {} Stage {}, OptKap start", pd.idx, k);
 
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptKap, fixedIdx,
+            Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptKap, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
@@ -296,8 +293,8 @@ int main(int argc, char* argv[])
 
 
             spdlog::info("Patch {} Stage {}, OptLam start", pd.idx, k);
-            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pv_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pv_s, adjointFunc_OptLam, fixedIdx,
+            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, adjointFunc_OptLam, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces);
 
@@ -328,9 +325,7 @@ int main(int argc, char* argv[])
             mof << "# face_id  t1  t2\n";
             lof << "# face_id  lambda  kappa\n";
             for (Face f : mesh.faces()) {
-                double sum = 0.0; int cnt = 0;
-                for (Vertex v : f.adjacentVertices()) { sum += kappa_pv_s[v]; cnt++; }
-                double kap = sum / cnt;
+                double kap = kappa_pf_s[f];
                 double lam = lambda_pf_s[f];
                 int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
                 double t1 = ac.feasible_t_vals[idx].first;
