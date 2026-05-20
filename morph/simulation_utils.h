@@ -50,7 +50,7 @@ double lineSearch(const Eigen::VectorXd& x0,
                   const Func& eval,
                   const Callback& callback = nullexpr,
                   const double shrink = 0.6,
-                  const int max_iters = 32)
+                  const int max_iters = 16)
 {
   const double slope = d.dot(g);  // directional derivative; negative for a descent direction
   Eigen::VectorXd x_trial = x0;
