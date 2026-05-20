@@ -143,12 +143,9 @@ int main(int /*argc*/, char * /*argv*/[])
     FaceData<double> lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
     FaceData<double> kappa_pf_s(mesh, morph_mesh.kappa_pf_s);
 
-    auto Vr = V;
-    auto V_init = V;
-    // V_init.col(0) = P.col(0);
-    // V_init.col(1) = P.col(1);
-    // V_init.col(2).setConstant(0.0);
-    Vr = V_init;
+    // V_init: flat plate (P embedded as z=0) rigidly aligned so the 3 fixed
+    // vertices sit exactly at their target positions in V.
+    Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
     
 
 

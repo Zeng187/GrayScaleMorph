@@ -187,7 +187,9 @@ int main(int argc, char* argv[])
 
         ///***************************************** Inverse Design *****************************************///
 
-        auto V_pred = V, Vr = V;
+        auto V_pred = V;
+        // V_init: flat plate aligned so fixed vertices match V exactly.
+        Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
 
         spdlog::info("Step 4: Inverse Design.");
 

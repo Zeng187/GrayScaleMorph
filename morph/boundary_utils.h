@@ -9,6 +9,14 @@
 /// Identify boundary faces (faces with at least one boundary edge).
 std::vector<bool> identifyBoundaryFaces(geometrycentral::surface::SurfaceMesh& mesh);
 
+/// Build a flat-plate V_init from P (2D parameterisation embedded as z=0),
+/// rigidly aligned (Procrustes) so the 3 fixed vertices exactly match their
+/// positions in V.  The remaining vertices are transformed by the same rigid
+/// body motion.
+Eigen::MatrixXd flatPlateAligned(const Eigen::MatrixXd& P,
+                                  const Eigen::MatrixXd& V,
+                                  const std::vector<int>& fixedVertexIdx);
+
 /// Build reference-face mapping for boundary faces.
 ///
 /// Interior faces (all edges interior) map to themselves.
