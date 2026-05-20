@@ -257,7 +257,13 @@ int main(int /*argc*/, char * /*argv*/[])
         wM_lam *= 0.5;
         wL_lam *= 0.5;
 
-        printf("---------------------------------------------------------------------------------------------------------------------\\n", k);
+        // Recompute reg accumulators after weight decay so the next stage's
+        // SPN energy formula uses the *new* weights consistently for both
+        // kappa_reg and lambda_reg.
+        kappa_reg  = computeKappaReg();
+        lambda_reg = computeLambdaReg();
+
+        printf("----------------------------------------------------------------------------------------------------------------------\n");
     }
 
     // V_target was already in physical (device) units; Vr lives in the same
