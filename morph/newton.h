@@ -140,3 +140,88 @@ double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+
+
+// ---------------------------------------------------------------------------
+// MGDA (Multiple Gradient Descent) variants — see docs/grayscalemorph/inverse_mgda.md
+//
+// Treats SPN energy F = (distance + kappa_reg + lambda_reg) and feasibility
+// penalty Phi as two independent objectives.  Each iter:
+//   d_F = -H_F^{-1} * grad F   (from the KKT system, wP=0)
+//   d_P = snap(theta) - theta  (closed form: hard-min penalty Hessian = (2*beta/nF)*I)
+//   alpha  = mgda_alpha(d_F, d_P)
+//   d      = alpha * d_F + (1 - alpha) * d_P
+//   step s by two-objective Armijo (lineSearchMulti) on F and Phi
+//
+// Terminates on Pareto-critical:  ||alpha * gF + (1-alpha) * gP|| < lim,
+// or when ||d||^2 < lim, or max_iters.  No wP/wM/wL homotopy.
+//
+// candidate_vals is the list of feasible projection targets for the optimised
+// variable (theta2 here): the hard-min Hessian assumes one nearest candidate
+// per face (Voronoi cell), so snap(theta_f) = argmin_C |theta_f - C|.
+// betaP scales the penalty so dP magnitude is comparable to dF; pass the
+// same betaP value used when constructing the TinyAD penaltyFunc.
+// ---------------------------------------------------------------------------
+
+Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXd& targetV,
+const Eigen::MatrixXd& initV,
+const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+geometrycentral::surface::FaceData<double>& theta1,
+geometrycentral::surface::FaceData<double>& theta2,
+const Eigen::VectorXd& masses,
+double other_reg,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
+const std::vector<double>& candidate_vals,
+double betaP,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM,
+double wL,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::vector<int>& ref_faces,
+double& final_distance,
+double& final_spn_energy,
+double& final_self_reg,
+double& final_penalty,
+double& final_pareto_norm,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+
+
+Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXd& targetV,
+const Eigen::MatrixXd& initV,
+const geometrycentral::surface::FaceData<Eigen::Matrix2d>& MrInv,
+geometrycentral::surface::FaceData<double>& theta1,
+geometrycentral::surface::FaceData<double>& theta2,
+const Eigen::VectorXd& masses,
+double other_reg,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
+const std::vector<double>& candidate_vals,
+double betaP,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM,
+double wL,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::vector<int>& ref_faces,
+double& final_distance,
+double& final_spn_energy,
+double& final_self_reg,
+double& final_penalty,
+double& final_pareto_norm,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});

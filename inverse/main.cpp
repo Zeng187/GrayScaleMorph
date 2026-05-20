@@ -168,11 +168,10 @@ int main(int /*argc*/, char * /*argv*/[])
     // across all stages since V topology doesn't change.
     LocalGlobalSolver paramSolver(V, F);
 
-    spdlog::info("Step 4: Inverse Design.");
+    spdlog::info("Step 4: Inverse Design (MGDA).");
 
-    double wP_kap = config.RuntimeSetting.wP_kap;
-    double wP_lam = config.RuntimeSetting.wP_lam;
-    double penalty_threshold = config.RuntimeSetting.penalty_threshold;
+    // MGDA does NOT use wP / penalty_threshold (penalty is the second objective,
+    // not a weighted term).  wP_kap / wP_lam in cfg.json are read but ignored.
     double betaP = config.RuntimeSetting.betaP;
     auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
     auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
@@ -180,22 +179,25 @@ int main(int /*argc*/, char * /*argv*/[])
     int stage_iter = 5;
     int k = 0;
 
-    double wM_kap = config.RuntimeSetting.wM_kap;
-    double wM_lam = config.RuntimeSetting.wM_lam;
-    double wL_kap = config.RuntimeSetting.wL_kap;
-    double wL_lam = config.RuntimeSetting.wL_lam;
+    // MGDA also drops wM/wL stage decay: regulariser weights are stage-constant
+    // and only meaningful inside F (their gradient enters d_F).
+    const double wM_kap = config.RuntimeSetting.wM_kap;
+    const double wM_lam = config.RuntimeSetting.wM_lam;
+    const double wL_kap = config.RuntimeSetting.wL_kap;
+    const double wL_lam = config.RuntimeSetting.wL_lam;
 
     double distance = 0.0;
     double spn_energy = 0.0;
-    double penalty_kap = 0.0;
-    double penalty_lam = 0.0;
+    double penalty_kap_val = 0.0;
+    double penalty_lam_val = 0.0;
+    double pareto_kap = 0.0;
+    double pareto_lam = 0.0;
+    double self_reg = 0.0;
 
-    // Regularisation accumulators kept in sync between stages so each SGN call
-    // receives the *other* variable's regulariser as a constant offset.
     auto computeKappaReg = [&]()
     {
-        const Eigen::VectorXd k = kappa_pf_s.toVector();
-        return wM_kap * k.dot(M_kappa * k) + wL_kap * k.dot(L_face * k);
+        const Eigen::VectorXd kv = kappa_pf_s.toVector();
+        return wM_kap * kv.dot(M_kappa * kv) + wL_kap * kv.dot(L_face * kv);
     };
     auto computeLambdaReg = [&]()
     {
@@ -204,7 +206,6 @@ int main(int /*argc*/, char * /*argv*/[])
     };
     double kappa_reg = computeKappaReg();
     double lambda_reg = computeLambdaReg();
-    double self_reg = 0.0;
 
     // Projected distance: snap the current (kappa, lambda) on every face to the
     // nearest feasible material pair, re-run forward Newton, and return the
@@ -236,102 +237,127 @@ int main(int /*argc*/, char * /*argv*/[])
         return d2;
     };
 
-    // One-line stage stats: SPN energy -> Distance -> Projected distance -> Penalties.
+    // MGDA stats: SPN energy / distance / projected dist / penalties / Pareto norms.
     auto printStageStats = [&]()
     {
         const double proj_dist = computeProjectedDistance();
-        penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
-        penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+        const double pen_kap_proxy = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+        const double pen_lam_proxy = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         std::cout << "SPN energy: " << spn_energy
                   << ", Distance: " << distance
                   << ", Projected distance: " << proj_dist
-                  << ", Penalty_kap: " << penalty_kap
-                  << ", Penalty_lam: " << penalty_lam
+                  << ", Phi_kap: " << penalty_kap_val
+                  << ", Phi_lam: " << penalty_lam_val
+                  << ", CandDiff_kap: " << pen_kap_proxy
+                  << ", CandDiff_lam: " << pen_lam_proxy
+                  << ", Pareto_kap: " << pareto_kap
+                  << ", Pareto_lam: " << pareto_lam
                   << "\n";
     };
 
+    // ARAP P-update lambda (reused by warm-up and MGDA stages).
+    auto runArapPUpdate = [&](const std::string& tag) {
+        Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
+        Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
+        Eigen::MatrixX2d P_2d = P;
+        paramSolver.solve(P_2d, sTarget, sTarget, 10);
+        P = P_2d;
+        Eigen::MatrixXd P_obj(P.rows(), 3);
+        P_obj.leftCols(2) = P;
+        P_obj.col(2).setZero();
+        igl::writeOBJ(morph_dir + "patch_0_P_" + tag + ".obj", P_obj, F);
+        MrInv = precomputeMrInv(mesh, P, F);
+        M_kappa = computeFaceMassKappa(mesh, MrInv);
+        std::cout << "[P-update] " << tag
+                  << ": lambda range [" << lambdaVec.minCoeff()
+                  << ", " << lambdaVec.maxCoeff() << "]\n";
+    };
+
+    // ---- Warm-up: pure-SPN SGN (no penalty) so distance/projected-distance
+    //      drop into a sensible basin before MGDA wakes Phi as 2nd objective.
+    const int warmup_stages = 1;
+    for (int kw = 0; kw < warmup_stages; ++kw) {
+        printf("============================ Warmup stage %d (pure SPN) ============================\n", kw);
+        std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap
+                  << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam << "\n";
+
+        printf("---- Warmup OptKap (no penalty) ----\n");
+        auto adjF_w_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Vr = sparse_gauss_newton_FixLam_OptKap(
+                 geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
+                 adjF_w_OptKap, fixedIdx,
+                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                 wM_kap, wL_kap,
+                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                 distance, spn_energy, self_reg);
+        kappa_reg = self_reg;
+        printStageStats();
+
+        printf("---- Warmup OptLam (no penalty) ----\n");
+        auto adjF_w_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Vr = sparse_gauss_newton_FixKap_OptLam(
+                 geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
+                 adjF_w_OptLam, fixedIdx,
+                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                 wM_lam, wL_lam,
+                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                 distance, spn_energy, self_reg);
+        lambda_reg = self_reg;
+        printStageStats();
+
+        runArapPUpdate("warmup" + std::to_string(kw));
+        // Reg accumulators after M_kappa refresh.
+        kappa_reg = computeKappaReg();
+        lambda_reg = computeLambdaReg();
+    }
+    printf("============================ Warmup done, entering MGDA ============================\n");
+
     while (k < stage_iter)
     {
+        printf("------------------------------------------------------ Stage: %d (MGDA) ------------------------------------------------------\n", k);
+        std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap
+                  << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam
+                  << ", betaP = " << betaP << "\n";
 
-        printf("------------------------------------------------------ Stage: %d ------------------------------------------------------\n", k);
-        std::cout << "Parameters Settings (Penalty):  wP_kap = " << wP_kap << ", wP_lam = " << wP_lam << "\n";
-        std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam << "\n";
-
-        printf("----------------------------  OptKap Start ----------------------------\n", k);
-
+        printf("----------------------------  OptKap Start (MGDA) ----------------------------\n", k);
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
-                                                       adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy, self_reg);
-        kappa_reg = self_reg; // sync for the next OptLam call
-
+        Vr = sparse_gauss_newton_FixLam_OptKap_MGDA(
+                 geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
+                 adjointFunc_OptKap, penalty_to_kapp, ac.feasible_kapp, betaP, fixedIdx,
+                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                 wM_kap, wL_kap,
+                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                 distance, spn_energy, self_reg, penalty_kap_val, pareto_kap);
+        kappa_reg = self_reg;
         printStageStats();
-
         printf("----------------------------  OptKap Finish ----------------------------\n", k);
 
-        printf("----------------------------  OptLam Start ----------------------------\n", k);
+        printf("----------------------------  OptLam Start (MGDA) ----------------------------\n", k);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
-                                                       adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy, self_reg);
-        lambda_reg = self_reg; // sync for the next OptKap call
-
+        Vr = sparse_gauss_newton_FixKap_OptLam_MGDA(
+                 geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
+                 adjointFunc_OptLam, penalty_to_lamb, ac.feasible_lamb, betaP, fixedIdx,
+                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                 wM_lam, wL_lam,
+                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                 distance, spn_energy, self_reg, penalty_lam_val, pareto_lam);
+        lambda_reg = self_reg;
         printStageStats();
-
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
-        // ---- Lambda-aware ARAP P-update -----------------------------------
-        // Given the per-face lambda assignment from this stage, run a few
-        // ARAP iterations so that P -> V Jacobian SVD on each face is
-        // clamped to {1/lambda_f}.  This minimises stretch energy w.r.t.
-        // the current lambda field, giving the next stage a better warm
-        // start.  After P changes, MrInv and the kappa face-mass matrix
-        // must be refreshed (M_lambda, L_face, masses are V/topology-only
-        // and stay unchanged).
-        {
-            Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
-            Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
-            Eigen::MatrixX2d P_2d = P;
-            paramSolver.solve(P_2d, sTarget, sTarget, 10);
-            P = P_2d;
-
-            // Write updated flat-plate P (z=0) to disk for inspection.
-            Eigen::MatrixXd P_obj(P.rows(), 3);
-            P_obj.leftCols(2) = P;
-            P_obj.col(2).setZero();
-            igl::writeOBJ(morph_dir + "patch_0_P_stage" + std::to_string(k) + ".obj",
-                          P_obj, F);
-
-            // Refresh P-dependent quantities.
-            MrInv = precomputeMrInv(mesh, P, F);
-            M_kappa = computeFaceMassKappa(mesh, MrInv);
-            std::cout << "[P-update] stage " << k
-                      << ": lambda range [" << lambdaVec.minCoeff()
-                      << ", " << lambdaVec.maxCoeff() << "]\n";
-        }
-        // -------------------------------------------------------------------
+        runArapPUpdate("stage" + std::to_string(k));
 
         k++;
-        if (penalty_kap >= penalty_threshold)
-            wP_kap *= 10;
-        if (penalty_lam >= penalty_threshold)
-            wP_lam *= 10;
-        if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+
+        // MGDA termination: both stages reached Pareto criticality.
+        if (pareto_kap < config.RuntimeSetting.epsilon &&
+            pareto_lam < config.RuntimeSetting.epsilon)
+        {
+            std::cout << "[MGDA] both stages Pareto-critical, stopping at k=" << k << "\n";
             break;
+        }
 
-        wM_kap *= 0.5;
-        wL_kap *= 0.5;
-        wM_lam *= 0.5;
-        wL_lam *= 0.5;
-
-        // Recompute reg accumulators after weight decay so the next stage's
-        // SPN energy formula uses the *new* weights consistently for both
-        // kappa_reg and lambda_reg.  Also picks up the refreshed M_kappa
-        // from the P-update above.
+        // Refresh kappa_reg after M_kappa update (MrInv changed).
         kappa_reg = computeKappaReg();
         lambda_reg = computeLambdaReg();
 

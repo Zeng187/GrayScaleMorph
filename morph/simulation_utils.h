@@ -42,6 +42,59 @@ void updateHGN(Eigen::SparseMatrix<double>& HGN,
 
 const auto nullexpr = [](double) {};
 
+/// MGDA (Multiple Gradient Descent) combination weight for two directions.
+///   alpha = argmin_{a in [0,1]}  || a*d_F + (1-a)*d_P ||_2^2
+/// closed form:
+///   num   = ||d_P||^2 - <d_F, d_P>
+///   denom = ||d_F||^2 + ||d_P||^2 - 2*<d_F, d_P>
+///   alpha = clamp(num / denom, 0, 1)
+/// Special cases: if denom < 1e-30 (d_F == d_P) return 0.5 (degenerate convex combo).
+double mgda_alpha(const Eigen::VectorXd& d_F, const Eigen::VectorXd& d_P);
+
+/// Two-objective Armijo line search.  Returns the largest accepted step
+/// size s in [shrink^max_iters, 1] satisfying both
+///   F(x0 + s*d) <= F(x0) + c*s*<gF, d>
+///   P(x0 + s*d) <= P(x0) + c*s*<gP, d>
+/// or -1 if no such s in the search range works.
+///
+/// Uses a fixed shrink (no polynomial interp): with two competing slopes
+/// the cubic model is unreliable, so we keep behaviour predictable.
+template <class EvalF, class EvalP, class Callback = decltype(nullexpr)>
+double lineSearchMulti(const Eigen::VectorXd& x0,
+                       const Eigen::VectorXd& d,
+                       const double f0,
+                       const Eigen::VectorXd& gF,
+                       const double p0,
+                       const Eigen::VectorXd& gP,
+                       const EvalF& evalF,
+                       const EvalP& evalP,
+                       const Callback& callback = nullexpr,
+                       const double shrink = 0.6,
+                       const int max_iters = 32)
+{
+  const double slopeF = d.dot(gF);
+  const double slopeP = d.dot(gP);
+  const double c = 1e-4;
+  Eigen::VectorXd x_trial = x0;
+  double s = 1.0;
+
+  for(int i = 0; i < max_iters; ++i)
+  {
+    x_trial = x0 + s * d;
+    callback(s);
+    const double f_new = evalF(x_trial);
+    const double p_new = evalP(x_trial);
+
+    const bool okF = (f_new <= f0 + c * s * slopeF);
+    const bool okP = (p_new <= p0 + c * s * slopeP);
+    if(okF && okP)
+      return s;
+
+    s *= shrink;
+  }
+  return -1;
+}
+
 template <class Func, class Callback = decltype(nullexpr)>
 double lineSearch(const Eigen::VectorXd& x0,
                   const Eigen::VectorXd& d,

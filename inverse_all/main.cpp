@@ -1,43 +1,51 @@
-
+// InverseAll: inverse design over ALL patches of a segmented model.
+// Reads pre-scaled V/P emitted by ParamAll; produces per-patch target / inv /
+// material / lamkap outputs.  Per-patch inner loop mirrors `inverse/` --
+// warm-up pure-SPN stages + MGDA stages + lambda-aware ARAP P-update.
+//
+// Reads (per patch i):
+//   PathSetting.TargetDir + {model}/patch_i_V.obj
+//   PathSetting.ParamDir  + {model}/patch_i_P.obj
+//   PathSetting.CondDir   + {model}/patch_i_bound_center.txt
+//
+// Writes (per patch i):
+//   PathSetting.MorphDir  + {model}/patch_i_targ.obj
+//   PathSetting.MorphDir  + {model}/patch_i_init.obj
+//   PathSetting.MorphDir  + {model}/patch_i_inv.obj
+//   PathSetting.MorphDir  + {model}/patch_i_P_warmupN.obj   (P snapshot per ARAP update)
+//   PathSetting.MorphDir  + {model}/patch_i_P_stageN.obj
+//   PathSetting.DesignDir + {model}/patch_i_material.txt
+//   PathSetting.DesignDir + {model}/patch_i_lamkap.txt
 
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
-// #include <igl/opengl/glfw/Viewer.h>
-#include <igl/read_triangle_mesh.h>
 #include <igl/loop.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
 #include <cmath>
-#include <limits>
 #include <filesystem>
-#include <io.h>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
 #include <geometrycentral/surface/vertex_position_geometry.h>
 
-#include"config.hpp"
+#include "config.hpp"
 #include "material.hpp"
 #include "parameterization.h"
 #include "simulation_utils.h"
 #include "functions.h"
 #include "newton.h"
+#include "LocalGlobalSolver.h"
 #include "morphmesh.hpp"
 #include "morph_functions.hpp"
-#include "output.hpp"
 #include "boundary_utils.h"
-
-// #define __VERFIY_FORWARD_PREDIT__
-#define __VERFIY_INVERSE_DESIGN__
 
 #define __Add_PENALTY__
 
-int main(int argc, char* argv[])
+int main(int /*argc*/, char* /*argv*/[])
 {
-
-
     using namespace geometrycentral;
     using namespace geometrycentral::surface;
 
@@ -46,16 +54,14 @@ int main(int argc, char* argv[])
     ac.ComputeMaterialCurve();
     ac.ComputeFeasibleVals();
 
-    spdlog::info("program start (multi-patch inverse design):");
+    spdlog::info("InverseAll: start (multi-patch inverse design, MGDA).");
 
-    ///***************************************** Patch I/O setup *****************************************///
-
-    const std::string model       = config.ModelSetting.ModelName;
-    const std::string target_dir  = config.PathSetting.TargetDir + model + "/";
-    const std::string param_dir   = config.PathSetting.ParamDir  + model + "/";
-    const std::string cond_dir    = config.PathSetting.CondDir   + model + "/";
-    const std::string design_dir  = config.PathSetting.DesignDir + model + "/";
-    const std::string morph_dir   = config.PathSetting.MorphDir  + model + "/";
+    const std::string model      = config.ModelSetting.ModelName;
+    const std::string target_dir = config.PathSetting.TargetDir + model + "/";
+    const std::string param_dir  = config.PathSetting.ParamDir  + model + "/";
+    const std::string cond_dir   = config.PathSetting.CondDir   + model + "/";
+    const std::string design_dir = config.PathSetting.DesignDir + model + "/";
+    const std::string morph_dir  = config.PathSetting.MorphDir  + model + "/";
     std::filesystem::create_directories(morph_dir);
     std::filesystem::create_directories(design_dir);
     spdlog::info("Target dir : {}", target_dir);
@@ -64,10 +70,7 @@ int main(int argc, char* argv[])
     spdlog::info("Design dir : {}", design_dir);
     spdlog::info("Morph  dir : {}", morph_dir);
 
-    ///***************************************** Phase 1: read pre-scaled V/P from disk *****************************************///
-    // V comes from TargetDir (scaled), P comes from ParamDir (scaled).  ParamAll
-    // must have produced these + global_scale.txt + per-patch cond files.
-
+    // ===== Phase 1: read pre-scaled V/P from disk (ParamAll outputs) =====
     struct PatchData {
         size_t idx;
         Eigen::MatrixXd V;
@@ -115,43 +118,36 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    ///***************************************** Phase 2: per-patch inverse design *****************************************///
+    // ===== Phase 2: per-patch inverse design =====
     // V/P are already in physical (device) units; no re-scaling here.
-
     for (auto& pd : patches) {
+        const std::string pid = std::to_string(pd.idx);
         spdlog::info("=================================================");
         spdlog::info("Inverse design for patch {} ({} V, {} F)", pd.idx, pd.nV, pd.nF);
         spdlog::info("=================================================");
 
-        // V and P are already scaled by globalScale (done by ParamAll).
-        // Aliases so the existing inverse-design code below reads naturally.
         Eigen::MatrixXd& V = pd.V;
         Eigen::MatrixXi& F = pd.F;
         Eigen::MatrixXd& P = pd.P;
-        size_t nV = pd.nV;
-        size_t nF = pd.nF;
+        const size_t nV = pd.nV;
+        const size_t nF = pd.nF;
 
         ManifoldSurfaceMesh mesh(F);
         VertexPositionGeometry geometry(mesh, V);
         geometry.refreshQuantities();
 
-        // Boundary-face reference mapping (BFS on dual graph).
         std::vector<bool> is_boundary_face;
         std::vector<int> ref_faces = buildRefFaces(mesh, is_boundary_face);
 
-        ///***************************************** Material Settings *****************************************///
-
-        spdlog::info("Step 2: Material Settings.");
-
+        spdlog::info("Patch {} Step 2: Material settings.", pd.idx);
         Eigen::MatrixXd targetV = V;
+        FaceData<Eigen::MatrixXd>   M     = precomputeM(mesh, V, F);
+        FaceData<Eigen::Matrix2d>   MrInv = precomputeMrInv(mesh, P, F);
 
-        FaceData<Eigen::MatrixXd> M = precomputeM(mesh, V, F);
-        FaceData<Eigen::Matrix2d> MrInv = precomputeMrInv(mesh, P, F);
-
-        // Boundary condition: read 3 vertex indices from cond file written by ParamAll
+        // Boundary condition: 3 vertex indices from cond file written by ParamAll.
         std::vector<int> fixedVertexIdx;
         {
-            const std::string cond_path = cond_dir + "patch_" + std::to_string(pd.idx) + "_bound_center.txt";
+            const std::string cond_path = cond_dir + "patch_" + pid + "_bound_center.txt";
             std::ifstream ifs(cond_path);
             if (!ifs.is_open()) {
                 spdlog::error("Cannot read cond file: {}.  Run ParamAll first.", cond_path);
@@ -162,75 +158,69 @@ int main(int argc, char* argv[])
             fixedVertexIdx = {v0, v1, v2};
             spdlog::info("Patch {} cond: v0={} v1={} v2={}", pd.idx, v0, v1, v2);
         }
-        std::vector<int> fixedIdx;  // 9 DOF indices
+        std::vector<int> fixedIdx;
         for (int v : fixedVertexIdx)
             for (int k = 0; k < 3; ++k) fixedIdx.push_back(3 * v + k);
         std::sort(fixedIdx.begin(), fixedIdx.end());
 
-        double E = 1.0;
-        double nu = 0.5;
+        const double E  = 1.0;
+        const double nu = 0.5;
         Morphmesh morph_mesh(V, P, F, E, nu);
-        Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF, ref_faces,
-            MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t, morph_mesh.kappa_pv_t, morph_mesh.kappa_pf_t, &morph_mesh.vertex_area_sum);
+        Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF, ref_faces, MrInv,
+                                      morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
+                                      morph_mesh.kappa_pv_t,  morph_mesh.kappa_pf_t,
+                                      &morph_mesh.vertex_area_sum);
         Morphmesh::SetMorphophing(morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
-            morph_mesh.kappa_pv_t,morph_mesh.kappa_pf_t,
-            morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
-            morph_mesh.kappa_pf_s, morph_mesh.kappa_pf_s);
+                                  morph_mesh.kappa_pv_t,  morph_mesh.kappa_pf_t,
+                                  morph_mesh.lambda_pv_s, morph_mesh.lambda_pf_s,
+                                  morph_mesh.kappa_pf_s,  morph_mesh.kappa_pf_s);
 
-        // Mirror physical-unit target into morph_dir so {targ, inv} sit side-by-side.
-        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_targ.obj", V, F);
-
+        igl::writeOBJ(morph_dir + "patch_" + pid + "_targ.obj", V, F);
 
         VertexData<double> lambda_pv_s(mesh, morph_mesh.lambda_pv_s);
-        FaceData<double> lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
-        FaceData<double> kappa_pf_s(mesh, morph_mesh.kappa_pf_s);
+        FaceData<double>   lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
+        FaceData<double>   kappa_pf_s (mesh, morph_mesh.kappa_pf_s);
 
-        ///***************************************** Inverse Design *****************************************///
-
-        auto V_pred = V;
-        // V_init: flat plate aligned so fixed vertices match V exactly.
         Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
-        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_init.obj", Vr, F);
+        igl::writeOBJ(morph_dir + "patch_" + pid + "_init.obj", Vr, F);
 
-        // Lumped vertex mass vector (size 3*nV) -- shared by all SGN calls so
-        // distance/SPN values match between main and the solver exactly.
         const Eigen::VectorXd masses = computeVertexMasses(geometry);
 
-        // Face-space matrices to compute the other-variable regulariser as
-        // a constant offset, so OptKap/OptLam stages share a unified SPN
-        // energy formula (distance + kappa_reg + lambda_reg).
-        const Eigen::SparseMatrix<double> M_kappa = computeFaceMassKappa(mesh, MrInv);
+        // M_kappa depends on MrInv -> refreshed after each P update.
+        Eigen::SparseMatrix<double>       M_kappa  = computeFaceMassKappa(mesh, MrInv);
         const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
-        const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
+        const Eigen::SparseMatrix<double> L_face   = computeFaceDualLaplacian(mesh);
 
-        spdlog::info("Step 4: Inverse Design.");
+        // ARAP solver for lambda-aware P-update at each stage end.
+        LocalGlobalSolver paramSolver(V, F);
 
-        double wP_kap = config.RuntimeSetting.wP_kap;
-        double wP_lam = config.RuntimeSetting.wP_lam;
-        double penalty_threshold = config.RuntimeSetting.penalty_threshold;
-        double betaP = config.RuntimeSetting.betaP;
+        spdlog::info("Patch {} Step 4: Inverse Design (MGDA).", pd.idx);
+
+        // MGDA does NOT use wP / penalty_threshold; wP_kap / wP_lam ignored.
+        const double betaP = config.RuntimeSetting.betaP;
         auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
         auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
-        auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
-        int stage_iter = 5;
+        const int stage_iter = 5;
         int k = 0;
 
-        double wM_kap = config.RuntimeSetting.wM_kap;
-        double wM_lam = config.RuntimeSetting.wM_lam;
-        double wL_kap = config.RuntimeSetting.wL_kap;
-        double wL_lam = config.RuntimeSetting.wL_lam;
-
-#ifdef __Add_PENALTY__
+        // MGDA: regulariser weights stage-constant.
+        const double wM_kap = config.RuntimeSetting.wM_kap;
+        const double wM_lam = config.RuntimeSetting.wM_lam;
+        const double wL_kap = config.RuntimeSetting.wL_kap;
+        const double wL_lam = config.RuntimeSetting.wL_lam;
 
         double distance = 0.0;
         double spn_energy = 0.0;
-        double penalty_kap = 0.0;
-        double penalty_lam = 0.0;
+        double penalty_kap_val = 0.0;
+        double penalty_lam_val = 0.0;
+        double pareto_kap = 0.0;
+        double pareto_lam = 0.0;
+        double self_reg = 0.0;
 
         auto computeKappaReg = [&]() {
-            const Eigen::VectorXd k = kappa_pf_s.toVector();
-            return wM_kap * k.dot(M_kappa * k) + wL_kap * k.dot(L_face * k);
+            const Eigen::VectorXd kv = kappa_pf_s.toVector();
+            return wM_kap * kv.dot(M_kappa * kv) + wL_kap * kv.dot(L_face * kv);
         };
         auto computeLambdaReg = [&]() {
             const Eigen::VectorXd l = lambda_pf_s.toVector();
@@ -238,132 +228,167 @@ int main(int argc, char* argv[])
         };
         double kappa_reg  = computeKappaReg();
         double lambda_reg = computeLambdaReg();
-        double self_reg   = 0.0;
-        while(k < stage_iter)
-        {
-            spdlog::info("Patch {} Stage {}, OptKap start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
-            auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
-                adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
-                distance, spn_energy, self_reg);
-            kappa_reg = self_reg;
 
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
-            penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
-
-
-
-            spdlog::info("Patch {} Stage {}, OptLam start, wP_kap: {:.6f}, wP_lam: {:.6f}.", pd.idx, k, wP_kap, wP_lam);
-            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
-                adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
-                distance, spn_energy, self_reg);
-            lambda_reg = self_reg;
-
-            penalty_kap = compute_candidate_diff(ac.feasible_kapp,kappa_pf_s.toVector(),true);
-            penalty_lam = compute_candidate_diff(ac.feasible_lamb,lambda_pf_s.toVector(),true);
-            spdlog::info("Patch {} Stage {}, OptLam finish- Distance: {:.6f}, SPN energy: {:.6f}, Penalty_kap: {:.6f}, Penalty_lam: {:.6f}",
-                         pd.idx, k, distance, spn_energy, penalty_kap, penalty_lam);
-
-            // Evaluate distance after jointly projecting kappa and lambda to the same feasible index
-            {
-                FaceData<double> kappa_pf_proj(mesh);
-                FaceData<double> lambda_pf_proj(mesh);
-
-                for (Face f : mesh.faces()) {
-                    double kap = kappa_pf_s[f];
-                    double lam = lambda_pf_s[f];
-                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb, kap, lam);
-                    kappa_pf_proj[f] = ac.feasible_kapp[idx];
-                    lambda_pf_proj[f] = ac.feasible_lamb[idx];
+        // Projected distance: per-face snap (lambda, kappa) -> nearest feasible
+        // material, re-run forward Newton, mass-weighted dist to target.
+        auto computeProjectedDistance = [&]() -> double {
+            FaceData<double> kappa_pf_proj(mesh);
+            FaceData<double> lambda_pf_proj(mesh);
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                kappa_pf_proj[f]  = ac.feasible_kapp[idx];
+                lambda_pf_proj[f] = ac.feasible_lamb[idx];
+            }
+            auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Eigen::MatrixXd Vr_proj = Vr;
+            newton(geometry, Vr_proj, simFunc_proj,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+            double d2 = 0.0;
+            for (size_t i = 0; i < nV; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    double d = Vr_proj(i, j) - targetV(i, j);
+                    d2 += masses(3 * i + j) * d * d;
                 }
+            return d2;
+        };
 
-                auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
-                    E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-                Eigen::MatrixXd Vr_proj = Vr;
-                newton(geometry, Vr_proj, simFunc_proj,
-                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        auto printStageStats = [&]() {
+            const double proj_dist     = computeProjectedDistance();
+            const double pen_kap_proxy = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
+            const double pen_lam_proxy = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
+            std::cout << "    patch " << pd.idx
+                      << "  SPN energy: " << spn_energy
+                      << ", Distance: " << distance
+                      << ", Projected distance: " << proj_dist
+                      << ", Phi_kap: " << penalty_kap_val
+                      << ", Phi_lam: " << penalty_lam_val
+                      << ", CandDiff_kap: " << pen_kap_proxy
+                      << ", CandDiff_lam: " << pen_lam_proxy
+                      << ", Pareto_kap: " << pareto_kap
+                      << ", Pareto_lam: " << pareto_lam
+                      << "\n";
+        };
 
-                double dist_proj = 0.0;
-                for (size_t i = 0; i < nV; ++i)
-                    for (int j = 0; j < 3; ++j) {
-                        double d = Vr_proj(i, j) - targetV(i, j);
-                        dist_proj += masses(3 * i + j) * d * d;
-                    }
-                spdlog::info("Patch {} Stage {}, Projected distance: {:.6f}", pd.idx, k, dist_proj);
-            }
+        // ARAP P-update (reused by warm-up and MGDA stages).
+        auto runArapPUpdate = [&](const std::string& tag) {
+            Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
+            Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
+            Eigen::MatrixX2d P_2d = P;
+            paramSolver.solve(P_2d, sTarget, sTarget, 10);
+            P = P_2d;
+            Eigen::MatrixXd P_obj(P.rows(), 3);
+            P_obj.leftCols(2) = P;
+            P_obj.col(2).setZero();
+            igl::writeOBJ(morph_dir + "patch_" + pid + "_P_" + tag + ".obj", P_obj, F);
+            MrInv   = precomputeMrInv(mesh, P, F);
+            M_kappa = computeFaceMassKappa(mesh, MrInv);
+            std::cout << "[P-update] patch " << pd.idx << " " << tag
+                      << ": lambda range [" << lambdaVec.minCoeff()
+                      << ", " << lambdaVec.maxCoeff() << "]\n";
+        };
+
+        // ---- Warm-up: pure-SPN SGN (no penalty) ----
+        const int warmup_stages = 1;
+        for (int kw = 0; kw < warmup_stages; ++kw) {
+            printf("============================ patch %zu Warmup stage %d (pure SPN) ============================\n",
+                   pd.idx, kw);
+            std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap
+                      << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam << "\n";
+
+            printf("---- patch %zu Warmup OptKap (no penalty) ----\n", pd.idx);
+            auto adjF_w_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness,
+                                                                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixLam_OptKap(
+                     geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
+                     adjF_w_OptKap, fixedIdx,
+                     config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                     wM_kap, wL_kap,
+                     E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                     distance, spn_energy, self_reg);
+            kappa_reg = self_reg;
+            printStageStats();
+
+            printf("---- patch %zu Warmup OptLam (no penalty) ----\n", pd.idx);
+            auto adjF_w_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness,
+                                                                 config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixKap_OptLam(
+                     geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
+                     adjF_w_OptLam, fixedIdx,
+                     config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                     wM_lam, wL_lam,
+                     E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                     distance, spn_energy, self_reg);
+            lambda_reg = self_reg;
+            printStageStats();
+
+            runArapPUpdate("warmup" + std::to_string(kw));
+            kappa_reg  = computeKappaReg();
+            lambda_reg = computeLambdaReg();
+        }
+        printf("============================ patch %zu Warmup done, entering MGDA ============================\n",
+               pd.idx);
+
+        while (k < stage_iter) {
+            printf("------------------------- patch %zu Stage: %d (MGDA) -------------------------\n", pd.idx, k);
+            std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap
+                      << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam
+                      << ", betaP = " << betaP << "\n";
+
+            printf("---------------------- patch %zu OptKap Start (MGDA) ----------------------\n", pd.idx);
+            auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness,
+                                                                      config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixLam_OptKap_MGDA(
+                     geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
+                     adjointFunc_OptKap, penalty_to_kapp, ac.feasible_kapp, betaP, fixedIdx,
+                     config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                     wM_kap, wL_kap,
+                     E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                     distance, spn_energy, self_reg, penalty_kap_val, pareto_kap);
+            kappa_reg = self_reg;
+            printStageStats();
+            printf("---------------------- patch %zu OptKap Finish ----------------------\n", pd.idx);
+
+            printf("---------------------- patch %zu OptLam Start (MGDA) ----------------------\n", pd.idx);
+            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness,
+                                                                       config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            Vr = sparse_gauss_newton_FixKap_OptLam_MGDA(
+                     geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
+                     adjointFunc_OptLam, penalty_to_lamb, ac.feasible_lamb, betaP, fixedIdx,
+                     config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                     wM_lam, wL_lam,
+                     E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                     distance, spn_energy, self_reg, penalty_lam_val, pareto_lam);
+            lambda_reg = self_reg;
+            printStageStats();
+            printf("---------------------- patch %zu OptLam Finish ----------------------\n", pd.idx);
+
+            runArapPUpdate("stage" + std::to_string(k));
 
             k++;
-            if (penalty_kap >= penalty_threshold) {
-                wP_kap *= 10;
-            }
-            if (penalty_lam >= penalty_threshold) {
-                wP_lam *= 10;
-            }
 
-            if(penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
+            // MGDA termination: both stages reached Pareto criticality.
+            if (pareto_kap < config.RuntimeSetting.epsilon &&
+                pareto_lam < config.RuntimeSetting.epsilon)
+            {
+                std::cout << "[MGDA] patch " << pd.idx
+                          << " both stages Pareto-critical, stopping at k=" << k << "\n";
                 break;
+            }
+
+            kappa_reg  = computeKappaReg();
+            lambda_reg = computeLambdaReg();
+
+            printf("--------------------------------------------------------------------------\n");
         }
 
-
-#else
-
-        Vr = targetV;
-        double distance_kap = 0.0, spn_kap = 0.0, self_reg_kap = 0.0;
-        double distance_lam = 0.0, spn_lam = 0.0, self_reg_lam = 0.0;
-        double kappa_reg_np  = computeKappaReg();
-        double lambda_reg_np = computeLambdaReg();
-        while(k < stage_iter)
-        {
-            spdlog::info("Patch {} Stage {}, OptKap start", pd.idx, k);
-
-            auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixLam_OptKap(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg_np,
-                adjointFunc_OptKap, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, config.RuntimeSetting.wM, config.RuntimeSetting.wL,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
-                distance_kap, spn_kap, self_reg_kap);
-            kappa_reg_np = self_reg_kap;
-
-            spdlog::info("Patch {} Stage {}, OptKap finish - Distance: {:.6f}, SPN energy: {:.6f}", pd.idx, k, distance_kap, spn_kap);
-
-
-            spdlog::info("Patch {} Stage {}, OptLam start", pd.idx, k);
-            auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Vr = sparse_gauss_newton_FixKap_OptLam(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg_np,
-                adjointFunc_OptLam, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, 0.0, config.RuntimeSetting.wL,
-                E, nu, ac.thickness, config.RuntimeSetting.w_s,config.RuntimeSetting.w_b, ref_faces,
-                distance_lam, spn_lam, self_reg_lam);
-            lambda_reg_np = self_reg_lam;
-
-            spdlog::info("Patch {} Stage {}, OptLam finish - Distance: {:.6f}, SPN energy: {:.6f}", pd.idx, k, distance_lam, spn_lam);
-
-
-            k++;
-        }
-
-
-#endif
-
-
-
-        // Vr lives in the same physical frame as V; write as-is.
-        igl::writeOBJ(morph_dir + "patch_" + std::to_string(pd.idx) + "_inv.obj", Vr, F);
+        igl::writeOBJ(morph_dir + "patch_" + pid + "_inv.obj", Vr, F);
 
         // ---- Material projection: per-face (lambda, kappa) -> nearest feasible (t1, t2) ----
-        // Writes two files:
-        //   patch_{i}_material.txt : face_id  t1  t2          (discrete grayscale)
-        //   patch_{i}_lamkap.txt   : face_id  lambda  kappa   (continuous SGN values)
         {
-            const std::string mat_path = design_dir + "patch_" + std::to_string(pd.idx) + "_material.txt";
-            const std::string lk_path  = design_dir + "patch_" + std::to_string(pd.idx) + "_lamkap.txt";
+            const std::string mat_path = design_dir + "patch_" + pid + "_material.txt";
+            const std::string lk_path  = design_dir + "patch_" + pid + "_lamkap.txt";
             std::ofstream mof(mat_path);
             std::ofstream lof(lk_path);
             mof << "# face_id  t1  t2\n";
@@ -384,7 +409,6 @@ int main(int argc, char* argv[])
         spdlog::info("Patch {} done.", pd.idx);
     }
 
-    spdlog::info("All patches processed; program finish.");
-
+    spdlog::info("InverseAll: all patches processed.");
+    return 0;
 }
-

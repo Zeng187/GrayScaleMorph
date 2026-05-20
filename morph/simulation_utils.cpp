@@ -8,6 +8,19 @@
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 #include <geometrycentral/surface/surface_mesh.h>
 #include <vector>
+#include <algorithm>
+
+double mgda_alpha(const Eigen::VectorXd& d_F, const Eigen::VectorXd& d_P)
+{
+  const double fF = d_F.squaredNorm();
+  const double pP = d_P.squaredNorm();
+  const double fp = d_F.dot(d_P);
+  const double denom = fF + pP - 2.0 * fp;
+  if(denom < 1e-30)
+    return 0.5;
+  const double a = (pP - fp) / denom;
+  return std::clamp(a, 0.0, 1.0);
+}
 
 Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry)
 {
