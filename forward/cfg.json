@@ -1,9 +1,9 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "hemisphere" ],
-		"MaterialName": [ "largedeform-material" ],
-		"DesignName":   [ "hemisphere_material" ],
+		"ModelName":    [ "quatrefoil" ],
+		"MaterialName": [ "grayscale-material" ],
+		"DesignName":   [ "petal" ],
 		"Postfix":      [ ".obj" ]
 	},
 	"RuntimeSettings": {

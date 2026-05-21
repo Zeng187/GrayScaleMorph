@@ -71,6 +71,20 @@ int main(int /*argc*/, char* /*argv*/[])
     spdlog::info("Design dir : {}", design_dir);
     spdlog::info("Morph  dir : {}", morph_dir);
 
+    // ---- Metrics CSV (long-format) ----------------------------------------
+    // Resources/2_morph/logs/mgda/{model}_metrics.csv
+    // One row per data point.  sub_iter == -1 = stage-kind summary (at the
+    // end of OptKap/OptLam/OptP); sub_iter >= 0 = i-th Newton iter inside
+    // the SGN call.  proj filled only on sub_iter == -1 rows.  decision
+    // filled only on phase=mgda, stage_kind=optp, sub_iter=-1 rows.
+    const std::string metrics_dir  = config.PathSetting.MorphDir + "logs/mgda/";
+    std::filesystem::create_directories(metrics_dir);
+    const std::string metrics_path = metrics_dir + model + "_metrics.csv";
+    std::ofstream metrics_csv(metrics_path);
+    metrics_csv << "patch_id,phase,stage_kind,stage_idx,sub_iter,"
+                << "F,dist,Kreg,Lreg,phi_kap,phi_lam,proj,decision\n";
+    spdlog::info("Metrics CSV -> {}", metrics_path);
+
     // ===== Phase 1: read pre-scaled V/P from disk (ParamAll outputs) =====
     struct PatchData {
         size_t idx;
@@ -278,6 +292,8 @@ int main(int /*argc*/, char* /*argv*/[])
             std::cout << "    patch " << pd.idx
                       << "  SPN energy: " << spn_energy
                       << ", Distance: " << distance
+                      << ", Kreg: " << kappa_reg
+                      << ", Lreg: " << lambda_reg
                       << ", Projected distance: " << proj_dist
                       << ", Phi_kap: " << penalty_kap_val
                       << ", Phi_lam: " << penalty_lam_val
@@ -286,6 +302,46 @@ int main(int /*argc*/, char* /*argv*/[])
                       << ", Pareto_kap: " << pareto_kap
                       << ", Pareto_lam: " << pareto_lam
                       << "\n";
+        };
+
+        // ---- CSV row writers ---------------------------------------------
+        // sub_iter == -1 -> end-of-stage-kind summary, with proj computed.
+        // sub_iter >= 0  -> SGN inner iter, proj column empty.
+        // decision is set only for phase=mgda, stage_kind=optp, sub_iter=-1.
+        auto writeSummaryRow = [&](const std::string& phase,
+                                   const std::string& stage_kind,
+                                   int stage_idx,
+                                   const std::string& decision = "") {
+            const double proj_dist = computeProjectedDistance();
+            metrics_csv << pd.idx << "," << phase << "," << stage_kind << ","
+                        << stage_idx << "," << -1 << ","
+                        << spn_energy << "," << distance << ","
+                        << kappa_reg << "," << lambda_reg << ","
+                        << penalty_kap_val << "," << penalty_lam_val << ","
+                        << proj_dist << "," << decision << "\n";
+            metrics_csv.flush();
+        };
+        // SGN iter callback factory: builds a callback that tags rows with
+        // the right phase / stage_kind / stage_idx and decides which of
+        // (Kreg, Lreg) the SGN-internal self_reg / other_reg correspond to.
+        auto makeIterCb = [&](const std::string& phase,
+                              const std::string& stage_kind,
+                              int stage_idx,
+                              bool optimising_kappa) -> SgnIterCallback {
+            return [&, phase, stage_kind, stage_idx, optimising_kappa]
+                   (int iter, double F_v, double dist_v, double phi_v,
+                    double self_reg, double other_reg) {
+                const double kr = optimising_kappa ? self_reg  : other_reg;
+                const double lr = optimising_kappa ? other_reg : self_reg;
+                const double phk = optimising_kappa ? phi_v : 0.0;
+                const double phl = optimising_kappa ? 0.0   : phi_v;
+                metrics_csv << pd.idx << "," << phase << "," << stage_kind << ","
+                            << stage_idx << "," << iter << ","
+                            << F_v << "," << dist_v << ","
+                            << kr << "," << lr << ","
+                            << phk << "," << phl << ","
+                            << "" << "," << "" << "\n";
+            };
         };
 
         // ARAP P-update (reused by warm-up and MGDA stages).
@@ -341,9 +397,12 @@ int main(int /*argc*/, char* /*argv*/[])
                      config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                      wM_kap, wL_kap,
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                     distance, spn_energy, self_reg);
+                     distance, spn_energy, self_reg,
+                     [](const auto&){},
+                     makeIterCb("warmup", "optkap", kw, /*optimising_kappa=*/true));
             kappa_reg = self_reg;
             printStageStats();
+            writeSummaryRow("warmup", "optkap", kw);
 
             printf("---- patch %zu Warmup OptLam (no penalty) ----\n", pd.idx);
             auto adjF_w_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness,
@@ -354,12 +413,16 @@ int main(int /*argc*/, char* /*argv*/[])
                      config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                      wM_lam, wL_lam,
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                     distance, spn_energy, self_reg);
+                     distance, spn_energy, self_reg,
+                     [](const auto&){},
+                     makeIterCb("warmup", "optlam", kw, /*optimising_kappa=*/false));
             lambda_reg = self_reg;
             printStageStats();
+            writeSummaryRow("warmup", "optlam", kw);
 
             runArapPUpdate("warmup" + std::to_string(kw));
             // runArapPUpdate already refreshed kappa_reg / lambda_reg / spn_energy.
+            writeSummaryRow("warmup", "optp", kw);
         }
         printf("============================ patch %zu Warmup done, entering MGDA ============================\n",
                pd.idx);
@@ -390,9 +453,12 @@ int main(int /*argc*/, char* /*argv*/[])
                      config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                      wM_kap, wL_kap,
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                     distance, spn_energy, self_reg, penalty_kap_val, pareto_kap);
+                     distance, spn_energy, self_reg, penalty_kap_val, pareto_kap,
+                     [](const auto&){},
+                     makeIterCb("mgda", "optkap", k, /*optimising_kappa=*/true));
             kappa_reg = self_reg;
             printStageStats();
+            writeSummaryRow("mgda", "optkap", k);
             printf("---------------------- patch %zu OptKap Finish ----------------------\n", pd.idx);
 
             printf("---------------------- patch %zu OptLam Start (MGDA) ----------------------\n", pd.idx);
@@ -404,9 +470,12 @@ int main(int /*argc*/, char* /*argv*/[])
                      config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                      wM_lam, wL_lam,
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                     distance, spn_energy, self_reg, penalty_lam_val, pareto_lam);
+                     distance, spn_energy, self_reg, penalty_lam_val, pareto_lam,
+                     [](const auto&){},
+                     makeIterCb("mgda", "optlam", k, /*optimising_kappa=*/false));
             lambda_reg = self_reg;
             printStageStats();
+            writeSummaryRow("mgda", "optlam", k);
             printf("---------------------- patch %zu OptLam Finish ----------------------\n", pd.idx);
 
             runArapPUpdate("stage" + std::to_string(k));
@@ -416,6 +485,8 @@ int main(int /*argc*/, char* /*argv*/[])
             const double dist_new = distance;
             const double proj_new = computeProjectedDistance();
             const bool   reject   = (dist_new > dist_best) && (proj_new > proj_best);
+            const std::string decision_str = reject ? "REJECT" : "ACCEPT";
+            writeSummaryRow("mgda", "optp", k, decision_str);
             if (!reject) {
                 dist_best       = dist_new;
                 proj_best       = proj_new;

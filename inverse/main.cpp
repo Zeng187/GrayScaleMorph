@@ -268,6 +268,8 @@ int main(int /*argc*/, char * /*argv*/[])
         const double pen_lam_proxy = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         std::cout << "SPN energy: " << spn_energy
                   << ", Distance: " << distance
+                  << ", Kreg: " << kappa_reg
+                  << ", Lreg: " << lambda_reg
                   << ", Projected distance: " << proj_dist
                   << ", Phi_kap: " << penalty_kap_val
                   << ", Phi_lam: " << penalty_lam_val

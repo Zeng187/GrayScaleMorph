@@ -7,6 +7,24 @@
 
 #include <functional>
 
+// Per-SGN-iter metrics callback.  Called at the end of each Newton iteration
+// inside the *_MGDA and non-penalty SGN functions so the host (main.cpp)
+// can stream a row into a CSV / metrics file.
+//   iter      : 0-based iter index inside the SGN call
+//   F         : SPN energy (distance + self_reg + other_reg [+ wP*phi for non-MGDA])
+//   distance  : mass-weighted distance to target
+//   phi       : feasibility penalty value (0 for non-penalty SGN)
+//   self_reg  : regulariser of the variable currently being optimised
+//   other_reg : regulariser of the variable currently held constant
+using SgnIterCallback = std::function<void(int iter,
+                                           double F,
+                                           double distance,
+                                           double phi,
+                                           double self_reg,
+                                           double other_reg)>;
+
+inline const SgnIterCallback sgn_iter_noop = [](int, double, double, double, double, double){};
+
 template <class Func, class Solver>
 void newton(
     Eigen::VectorXd& x,
@@ -54,7 +72,8 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const SgnIterCallback& iter_cb = sgn_iter_noop);
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(
@@ -81,7 +100,8 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const SgnIterCallback& iter_cb = sgn_iter_noop);
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(
@@ -192,7 +212,8 @@ double& final_spn_energy,
 double& final_self_reg,
 double& final_penalty,
 double& final_pareto_norm,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const SgnIterCallback& iter_cb = sgn_iter_noop);
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
@@ -224,4 +245,5 @@ double& final_spn_energy,
 double& final_self_reg,
 double& final_penalty,
 double& final_pareto_norm,
-const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
+const SgnIterCallback& iter_cb = sgn_iter_noop);

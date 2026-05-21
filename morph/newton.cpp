@@ -131,7 +131,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double& final_distance,
                                     double& final_spn_energy,
                                     double& final_self_reg,
-                                    const std::function<void(const Eigen::VectorXd&)>& callback)
+                                    const std::function<void(const Eigen::VectorXd&)>& callback,
+                                    const SgnIterCallback& iter_cb)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -299,10 +300,14 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     }
     theta += s * deltaTheta;
 
+    const double iter_F   = distance(theta);
+    const double iter_d   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double iter_sr  = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tSPN energy: " << distance(theta)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tSPN energy: " << iter_F
+              << "\tDistance: " << iter_d
               << "\tStep size: " << s << std::endl;
+    iter_cb(i, iter_F, iter_d, /*phi=*/0.0, /*self_reg=*/iter_sr, other_reg);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -349,7 +354,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   double& final_distance,
                                   double& final_spn_energy,
                                   double& final_self_reg,
-                                  const std::function<void(const Eigen::VectorXd&)>& callback)
+                                  const std::function<void(const Eigen::VectorXd&)>& callback,
+                                  const SgnIterCallback& iter_cb)
 {
   SurfaceMesh& mesh = geometry.mesh;
 
@@ -544,10 +550,14 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     theta += s * deltaTheta;
 
+    const double iter_F   = distance(theta);
+    const double iter_d   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double iter_sr  = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
-              << "\tSPN energy: " << distance(theta)
-              << "\tDistance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "\tSPN energy: " << iter_F
+              << "\tDistance: " << iter_d
               << "\tStep size: " << s << std::endl;
+    iter_cb(i, iter_F, iter_d, /*phi=*/0.0, /*self_reg=*/iter_sr, other_reg);
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1142,7 +1152,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     double& final_self_reg,
     double& final_penalty,
     double& final_pareto_norm,
-    const std::function<void(const Eigen::VectorXd&)>& callback)
+    const std::function<void(const Eigen::VectorXd&)>& callback,
+    const SgnIterCallback& iter_cb)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1338,14 +1349,17 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     f_F = F_eval(theta);   // already re-equilibrated x for new theta
     f_P = Phi_eval(theta);
 
+    const double iter_dist = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
     std::cout << "iter " << i
               << "  alpha=" << alpha
               << "  ||d||=" << d.norm()
               << "  pareto=" << pareto_norm
               << "  F=" << f_F
               << "  Phi=" << f_P
-              << "  dist=" << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "  dist=" << iter_dist
               << "  step=" << s << "\n";
+    iter_cb(i, f_F, iter_dist, f_P, iter_self_reg, other_reg);
 
     callback(x);
   }
@@ -1398,7 +1412,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     double& final_self_reg,
     double& final_penalty,
     double& final_pareto_norm,
-    const std::function<void(const Eigen::VectorXd&)>& callback)
+    const std::function<void(const Eigen::VectorXd&)>& callback,
+    const SgnIterCallback& iter_cb)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1580,14 +1595,17 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     f_F = F_eval(theta);
     f_P = Phi_eval(theta);
 
+    const double iter_dist = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const double iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
     std::cout << "iter " << i
               << "  alpha=" << alpha
               << "  ||d||=" << d.norm()
               << "  pareto=" << pareto_norm
               << "  F=" << f_F
               << "  Phi=" << f_P
-              << "  dist=" << (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
+              << "  dist=" << iter_dist
               << "  step=" << s << "\n";
+    iter_cb(i, f_F, iter_dist, f_P, iter_self_reg, other_reg);
 
     callback(x);
   }
