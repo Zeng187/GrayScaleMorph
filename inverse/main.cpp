@@ -174,16 +174,16 @@ int main(int /*argc*/, char * /*argv*/[])
     double wP_lam = config.RuntimeSetting.wP_lam;
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
-    // 2D joint hard-min penalty: the per-face penalty is the joint distance
-    // to the *same* feasible (kappa, lambda) pair (argmin over a single
-    // candidate index), so the penalty gradient agrees with `find_feasible_idx`.
-    // lambda_pf_s / kappa_pf_s captured by reference: the penalty function reads
-    // their up-to-date values whenever it is evaluated.
-    const double alpha_joint = config.RuntimeSetting.joint_penalty_alpha;
+    // 2D joint hard-min penalty in the Efrati non-Euclidean plate energy
+    // metric: argmin over a *single* candidate index agrees with
+    // find_feasible_idx exactly.  The stretching / bending exponents in the
+    // distance formula already encode the right kappa-vs-lambda weighting
+    // (no manual alpha needed).  lambda_pf_s / kappa_pf_s captured by
+    // reference so the penalty automatically uses the latest face data.
     auto penalty_to_kapp = MaterialJointPenaltyPerF_OptKap(geometry, lambda_pf_s,
-        ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
+        ac.feasible_kapp, ac.feasible_lamb, ac.thickness, nu, betaP);
     auto penalty_to_lamb = MaterialJointPenaltyPerF_OptLam(geometry, kappa_pf_s,
-        ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
+        ac.feasible_kapp, ac.feasible_lamb, ac.thickness, nu, betaP);
 
     int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;

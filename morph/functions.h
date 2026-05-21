@@ -157,30 +157,38 @@ MaterialPenaltyFunctionPerF(geometrycentral::surface::IntrinsicGeometryInterface
                             const std::vector<double> &feasible_vals,
                             double beta);
 
-// -- 2D joint hard-min penalties --------------------------------------------
+// -- 2D joint hard-min penalty in elastic-energy metric --------------------
 //
-// `feasible_kapp[i]` and `feasible_lamb[i]` together describe the i-th
-// feasible (t1, t2) pair.  These joint penalties take the min over i of the
-// 2D distance to the candidate pair, so the argmin agrees with
-// `find_feasible_idx` exactly: the penalty gradient never pulls toward a
-// "virtual" pair (kappa-from-pair-A, lambda-from-pair-B) that doesn't exist
-// in the feasible set.
+// `feasible_kapp[i]` and `feasible_lamb[i]` describe the i-th feasible
+// (t1, t2) pair.  The joint penalty takes the min over i of the Efrati
+// non-Euclidean plate strain-energy distance to that pair:
 //
-// Distance to pair i:   (kappa - feasible_kapp[i])^2 + alpha * (lambda - feasible_lamb[i])^2
+//   d^2_i(lambda, kappa) = lambdabar_i^2 * (E/(1-nu)) *
+//                          [ (h/4)   * (lambda^2 - lambdabar_i^2)^2
+//                          + (h^3/12)* (kappa  - kappabar_i  )^2 ]
 //
-// `alpha` re-weights the lambda contribution because kappa and lambda have
-// different numerical magnitudes.  Argmin is done via value-only comparison
-// inside the TinyAD lambda, so AD only tracks the surviving (variable - cand)^2
-// branch and the gradient strictly points toward the joint-nearest pair.
+//   penalty_per_face = beta / nF * min_i d^2_i
 //
-// _OptKap variant: variable = kappa, lambda is held constant from `lambda_pf`.
-// _OptLam variant: variable = lambda, kappa  is held constant from `kappa_pf`.
+// The bracket has the correct thickness exponents (h for stretching, h^3 for
+// bending), and the leading lambdabar_i^2 is the candidate-side area element
+// sqrt(det(gbar_i)).  Different kappa/lambda units are naturally rebalanced
+// by this physical metric, so no manual `alpha` is needed.
+//
+// argmin is computed via value-only comparison so TinyAD only tracks the
+// surviving (variable - cand)^2 branch.  The "other" dimension is a constant
+// captured by reference from the per-face FaceData; OptKap holds lambda
+// constant from `lambda_pf`, OptLam holds kappa constant from `kappa_pf`.
+//
+// E (Young's modulus) is fixed at 1.0 in these helpers to stay consistent
+// with the SGN forward-sim setup; downstream uses pass `beta` to scale the
+// overall penalty weight.
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 MaterialJointPenaltyPerF_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                                 const geometrycentral::surface::FaceData<double> &lambda_pf,
                                 const std::vector<double> &feasible_kapp,
                                 const std::vector<double> &feasible_lamb,
-                                double alpha,
+                                double thickness,
+                                double poisson_ratio,
                                 double beta);
 
 TinyAD::ScalarFunction<1, double, Eigen::Index>
@@ -188,5 +196,6 @@ MaterialJointPenaltyPerF_OptLam(geometrycentral::surface::IntrinsicGeometryInter
                                 const geometrycentral::surface::FaceData<double> &kappa_pf,
                                 const std::vector<double> &feasible_kapp,
                                 const std::vector<double> &feasible_lamb,
-                                double alpha,
+                                double thickness,
+                                double poisson_ratio,
                                 double beta);
