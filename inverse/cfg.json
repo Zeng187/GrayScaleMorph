@@ -23,6 +23,7 @@
 		"stage_iter": [ 10 ],
 		"wP_growth_factor_kap": [ 1.0 ],
 		"wP_growth_factor_lam": [ 1.0 ],
+		"joint_penalty_alpha": [ 1.0 ],
 		"morph_method": [ "homotopy" ]
 	}
 }

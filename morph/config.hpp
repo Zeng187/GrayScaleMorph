@@ -72,6 +72,7 @@ public:
         int    stage_iter;              // outer alternating-stage count
         double wP_growth_factor_kap;    // initial (1+factor) homotopy step for wP_kap; halved on REJECT
         double wP_growth_factor_lam;    // initial (1+factor) homotopy step for wP_lam; halved on REJECT
+        double joint_penalty_alpha;     // lambda-vs-kappa weight in the 2D joint penalty distance
         std::string morph_method;       // subdir name under MorphLogsDir; e.g. "homotopy", "mgda"
     } RuntimeSetting;
 

@@ -1602,3 +1602,94 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
 
   return func;
 }
+
+// ---------------------------------------------------------------------------
+// 2D joint hard-min penalties (OptKap / OptLam)
+// ---------------------------------------------------------------------------
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialJointPenaltyPerF_OptKap(IntrinsicGeometryInterface &geometry,
+                                const FaceData<double> &lambda_pf,
+                                const std::vector<double> &feasible_kapp,
+                                const std::vector<double> &feasible_lamb,
+                                double alpha,
+                                double beta)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nF = static_cast<int>(mesh.nFaces());
+  const int feasible_cnt = static_cast<int>(feasible_kapp.size());
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
+
+  func.add_elements<1>(
+      TinyAD::range(mesh.nFaces()),
+      [&lambda_pf, feasible_kapp, feasible_lamb, feasible_cnt,
+       alpha, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+        T kap = element.variables(f_idx)(0);
+        const double lam_f = lambda_pf[mesh.face(f_idx)];
+
+        // Hard min over the joint 2D distance to each (kappa_j, lambda_j) pair.
+        // The argmin is done via value-only comparison on AD `T`, so TinyAD
+        // only tracks autodiff through the *surviving* (kap - kappa_j*)^2 branch.
+        // The lambda term is a constant w.r.t. the autodiff variable (lambda
+        // is held fixed during OptKap), so it just shifts the per-candidate
+        // distance and does not contribute to the gradient.
+        T r = T(1e30);
+        for (int j = 0; j < feasible_cnt; ++j)
+        {
+          T d_kap   = kap - T(feasible_kapp[j]);
+          const double d_lam = lam_f - feasible_lamb[j];
+          T d2 = d_kap * d_kap + T(alpha * d_lam * d_lam);
+          if (d2 < r)
+            r = d2;
+        }
+        return T(beta) * r / T(nF);
+      });
+
+  return func;
+}
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialJointPenaltyPerF_OptLam(IntrinsicGeometryInterface &geometry,
+                                const FaceData<double> &kappa_pf,
+                                const std::vector<double> &feasible_kapp,
+                                const std::vector<double> &feasible_lamb,
+                                double alpha,
+                                double beta)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nF = static_cast<int>(mesh.nFaces());
+  const int feasible_cnt = static_cast<int>(feasible_kapp.size());
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
+
+  func.add_elements<1>(
+      TinyAD::range(mesh.nFaces()),
+      [&kappa_pf, feasible_kapp, feasible_lamb, feasible_cnt,
+       alpha, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+        T lam = element.variables(f_idx)(0);
+        const double kap_f = kappa_pf[mesh.face(f_idx)];
+
+        // Argmin via value-only comparison; AD tracks only the surviving
+        // (lam - lambda_j*)^2 branch.  The kappa term is a constant
+        // contribution per candidate.
+        T r = T(1e30);
+        for (int j = 0; j < feasible_cnt; ++j)
+        {
+          const double d_kap = kap_f - feasible_kapp[j];
+          T d_lam = lam - T(feasible_lamb[j]);
+          T d2 = T(d_kap * d_kap) + T(alpha) * d_lam * d_lam;
+          if (d2 < r)
+            r = d2;
+        }
+        return T(beta) * r / T(nF);
+      });
+
+  return func;
+}

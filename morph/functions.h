@@ -156,3 +156,37 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 MaterialPenaltyFunctionPerF(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                             const std::vector<double> &feasible_vals,
                             double beta);
+
+// -- 2D joint hard-min penalties --------------------------------------------
+//
+// `feasible_kapp[i]` and `feasible_lamb[i]` together describe the i-th
+// feasible (t1, t2) pair.  These joint penalties take the min over i of the
+// 2D distance to the candidate pair, so the argmin agrees with
+// `find_feasible_idx` exactly: the penalty gradient never pulls toward a
+// "virtual" pair (kappa-from-pair-A, lambda-from-pair-B) that doesn't exist
+// in the feasible set.
+//
+// Distance to pair i:   (kappa - feasible_kapp[i])^2 + alpha * (lambda - feasible_lamb[i])^2
+//
+// `alpha` re-weights the lambda contribution because kappa and lambda have
+// different numerical magnitudes.  Argmin is done via value-only comparison
+// inside the TinyAD lambda, so AD only tracks the surviving (variable - cand)^2
+// branch and the gradient strictly points toward the joint-nearest pair.
+//
+// _OptKap variant: variable = kappa, lambda is held constant from `lambda_pf`.
+// _OptLam variant: variable = lambda, kappa  is held constant from `kappa_pf`.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialJointPenaltyPerF_OptKap(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                const geometrycentral::surface::FaceData<double> &lambda_pf,
+                                const std::vector<double> &feasible_kapp,
+                                const std::vector<double> &feasible_lamb,
+                                double alpha,
+                                double beta);
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialJointPenaltyPerF_OptLam(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                const geometrycentral::surface::FaceData<double> &kappa_pf,
+                                const std::vector<double> &feasible_kapp,
+                                const std::vector<double> &feasible_lamb,
+                                double alpha,
+                                double beta);

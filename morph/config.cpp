@@ -100,6 +100,7 @@ Config::Config(const std::string& filePath) {
             nlohmann::json::array({default_growth}))[0];
     }
     RuntimeSetting.morph_method       = rt.value("morph_method",     nlohmann::json::array({std::string("homotopy")}))[0].get<std::string>();
+    RuntimeSetting.joint_penalty_alpha = rt.value("joint_penalty_alpha", nlohmann::json::array({1.0}))[0];
 }
 
 std::string Config::materialJsonPath() const

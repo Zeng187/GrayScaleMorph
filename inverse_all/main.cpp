@@ -215,8 +215,12 @@ int main(int argc, char* argv[])
         double wP_lam = config.RuntimeSetting.wP_lam;
         double penalty_threshold = config.RuntimeSetting.penalty_threshold;
         double betaP = config.RuntimeSetting.betaP;
-        auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
-        auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
+        // 2D joint hard-min penalty - see inverse/main.cpp for rationale.
+        const double alpha_joint = config.RuntimeSetting.joint_penalty_alpha;
+        auto penalty_to_kapp = MaterialJointPenaltyPerF_OptKap(geometry, lambda_pf_s,
+            ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
+        auto penalty_to_lamb = MaterialJointPenaltyPerF_OptLam(geometry, kappa_pf_s,
+            ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
         auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
         int stage_iter = config.RuntimeSetting.stage_iter;

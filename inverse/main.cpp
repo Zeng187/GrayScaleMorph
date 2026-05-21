@@ -174,8 +174,16 @@ int main(int /*argc*/, char * /*argv*/[])
     double wP_lam = config.RuntimeSetting.wP_lam;
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
-    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
-    auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
+    // 2D joint hard-min penalty: the per-face penalty is the joint distance
+    // to the *same* feasible (kappa, lambda) pair (argmin over a single
+    // candidate index), so the penalty gradient agrees with `find_feasible_idx`.
+    // lambda_pf_s / kappa_pf_s captured by reference: the penalty function reads
+    // their up-to-date values whenever it is evaluated.
+    const double alpha_joint = config.RuntimeSetting.joint_penalty_alpha;
+    auto penalty_to_kapp = MaterialJointPenaltyPerF_OptKap(geometry, lambda_pf_s,
+        ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
+    auto penalty_to_lamb = MaterialJointPenaltyPerF_OptLam(geometry, kappa_pf_s,
+        ac.feasible_kapp, ac.feasible_lamb, alpha_joint, betaP);
 
     int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;
