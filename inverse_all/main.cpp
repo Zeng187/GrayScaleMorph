@@ -303,6 +303,10 @@ int main(int argc, char* argv[])
         double lambda_reg_best = lambda_reg;
         double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
 
+        // Per-patch CSV log: stage,substage,iter,spn,dist.
+        std::ofstream iter_log_ofs(morph_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
+        iter_log_ofs << "stage,substage,iter,spn,dist\n";
+
         while (k < stage_iter)
         {
             spdlog::info("Patch {} Stage {}: wP_kap={:.6f}, wP_lam={:.6f}, wM_kap={:.6f}, wL_kap={:.6f}, wM_lam={:.6f}, wL_lam={:.6f}",
@@ -310,12 +314,17 @@ int main(int argc, char* argv[])
 
             // -- OptKap --
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            auto logger_OptKap = [&iter_log_ofs, k](int i, double spn, double dist) {
+                iter_log_ofs << k << ",OptKap," << i << "," << spn << "," << dist << "\n";
+            };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                distance, spn_energy, self_reg);
+                distance, spn_energy, self_reg,
+                logger_OptKap);
             kappa_reg = self_reg;
+            iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "\n";
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
             spdlog::info("Patch {} Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
@@ -323,12 +332,17 @@ int main(int argc, char* argv[])
 
             // -- OptLam --
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            auto logger_OptLam = [&iter_log_ofs, k](int i, double spn, double dist) {
+                iter_log_ofs << k << ",OptLam," << i << "," << spn << "," << dist << "\n";
+            };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                distance, spn_energy, self_reg);
+                distance, spn_energy, self_reg,
+                logger_OptLam);
             lambda_reg = self_reg;
+            iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "\n";
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
             spdlog::info("Patch {} Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
@@ -370,6 +384,7 @@ int main(int argc, char* argv[])
                 spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} (lambda range [{:.4f},{:.4f}])",
                              pd.idx, k, spn_energy, distance, computeProjectedDistance(),
                              lambdaVec.minCoeff(), lambdaVec.maxCoeff());
+                iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "\n";
             }
 
             // -- Trust-region safeguard --

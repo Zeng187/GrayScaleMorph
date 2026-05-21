@@ -294,6 +294,14 @@ int main(int /*argc*/, char * /*argv*/[])
     double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
+    // CSV trajectory log of every SGN iter's (spn, dist) plus end-of-substage
+    // markers, written to morph_dir/iter_log.csv.  Schema:
+    //   stage, substage, iter, spn, dist
+    // where substage in {OptKap, OptLam, OptP}, iter is the SGN inner-iter
+    // index (-1 marks an end-of-substage "final" row).
+    std::ofstream iter_log_ofs(morph_dir + "iter_log.csv");
+    iter_log_ofs << "stage,substage,iter,spn,dist\n";
+
     // Dynamic wP growth, expressed as a multiplicative *increment* factor:
     //   wP_new = wP * (1 + wP_growth_factor)
     // Initial value read from cfg.json (RuntimeSettings.wP_growth_factor,
@@ -313,12 +321,17 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptKap Start ----------------------------\n", k);
 
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        auto logger_OptKap = [&iter_log_ofs, k](int i, double spn, double dist) {
+            iter_log_ofs << k << ",OptKap," << i << "," << spn << "," << dist << "\n";
+        };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy, self_reg);
+                                                       distance, spn_energy, self_reg,
+                                                       logger_OptKap);
         kappa_reg = self_reg; // sync for the next OptLam call
+        iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "\n";
 
         printStageStats();
 
@@ -326,12 +339,17 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptLam Start ----------------------------\n", k);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        auto logger_OptLam = [&iter_log_ofs, k](int i, double spn, double dist) {
+            iter_log_ofs << k << ",OptLam," << i << "," << spn << "," << dist << "\n";
+        };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                                                       distance, spn_energy, self_reg);
+                                                       distance, spn_energy, self_reg,
+                                                       logger_OptLam);
         lambda_reg = self_reg; // sync for the next OptKap call
+        iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "\n";
 
         printStageStats();
 
@@ -398,6 +416,7 @@ int main(int /*argc*/, char * /*argv*/[])
                       << ": lambda range [" << lambdaVec.minCoeff()
                       << ", " << lambdaVec.maxCoeff() << "]  ";
             printStageStats();
+            iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "\n";
         }
         // -------------------------------------------------------------------
 
