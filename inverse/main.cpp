@@ -170,19 +170,19 @@ int main(int /*argc*/, char * /*argv*/[])
 
     spdlog::info("Step 4: Inverse Design.");
 
-    double wP = config.RuntimeSetting.wP;
+    double wP_lam = config.RuntimeSetting.wP_lam;
+    double wP_kap = config.RuntimeSetting.wP_kap;
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
-    // 2D joint hard-min penalty in the Efrati non-Euclidean plate energy
-    // metric: argmin over a *single* candidate index agrees with
-    // find_feasible_idx exactly.  The stretching / bending exponents in the
-    // distance formula already encode the right kappa-vs-lambda weighting
-    // (no manual alpha needed).  lambda_pf_s / kappa_pf_s captured by
-    // reference so the penalty automatically uses the latest face data.
-    auto penalty_to_kapp = MaterialJointPenaltyPerF_OptKap(geometry, lambda_pf_s,
-        ac.feasible_kapp, ac.feasible_lamb, ac.thickness, nu, betaP);
-    auto penalty_to_lamb = MaterialJointPenaltyPerF_OptLam(geometry, kappa_pf_s,
-        ac.feasible_kapp, ac.feasible_lamb, ac.thickness, nu, betaP);
+    // 1D independent hard-min penalties: kappa pulls toward the nearest 1D
+    // kappa candidate; lambda pulls toward the nearest 1D lambda candidate
+    // (argmins can pick different candidate indices).  Empirically gives a
+    // smaller proj_dist than 2D joint variants on the hemisphere benchmark
+    // -- the looser pull lets distance keep optimising in the (lambda, kappa)
+    // gaps between candidate pairs.  wP_kap / wP_lam control the per-direction
+    // penalty weight at the SGN call (not baked into the penalty function).
+    auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
+    auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
 
     int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;
@@ -300,7 +300,8 @@ int main(int /*argc*/, char * /*argv*/[])
     Eigen::SparseMatrix<double>     M_kappa_best = M_kappa;
     double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
     double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
-    double wP_best = wP;
+    double wP_lam_best = wP_lam;
+    double wP_kap_best = wP_kap;
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
     // CSV trajectory log of every SGN iter's (spn, dist) plus end-of-substage
@@ -314,7 +315,9 @@ int main(int /*argc*/, char * /*argv*/[])
                                     + model + "/";
     std::filesystem::create_directories(morphlogs_dir);
     std::ofstream iter_log_ofs(morphlogs_dir + "iter_log.csv");
-    iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,kappa_reg,lambda_reg,penalty_term\n";
+    iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,"
+                 << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
+                 << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam\n";
     spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
 
     // Helper to reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
@@ -326,16 +329,17 @@ int main(int /*argc*/, char * /*argv*/[])
         return V_iter;
     };
 
-    // Single homotopy growth factor for the unified wP (joint 2D penalty
-    // means one penalty function -> one wP).  wP_new = wP * (1 + factor).
-    // Halved on a REJECT, floored at 1e-4.
-    double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
+    // Independent homotopy growth factors for wP_lam (A) and wP_kap (B).
+    // wP_lam_new = wP_lam * (1 + wP_lam_growth_factor) ; similarly wP_kap.
+    // Halved on REJECT.  Floored at 1e-4.
+    double wP_lam_growth_factor = config.RuntimeSetting.wP_lam_growth_factor;
+    double wP_kap_growth_factor = config.RuntimeSetting.wP_kap_growth_factor;
 
     while (k < stage_iter)
     {
 
         printf("------------------------------------------------------ Stage: %d ------------------------------------------------------\n", k);
-        std::cout << "Parameters Settings (Penalty):  wP = " << wP << "\n";
+        std::cout << "Parameters Settings (Penalty):  wP_lam = " << wP_lam << ", wP_kap = " << wP_kap << "\n";
         std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam << "\n";
 
         printf("----------------------------  OptKap Start ----------------------------\n", k);
@@ -343,16 +347,22 @@ int main(int /*argc*/, char * /*argv*/[])
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         // OptKap: self_reg = kappa_reg (dynamic), lambda_reg is the constant other_reg.
         auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
-                                 double spn, double dist, double self_reg_iter, double penalty_iter) {
-            const double pd = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                                 double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
+            const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            // Always log BOTH penalties (full kappa-side and lambda-side
+            // distance to the 1D feasible set at the current theta).
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptKap," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << self_reg_iter << "," << lambda_reg << ","
-                         << penalty_iter << "\n";
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
@@ -360,9 +370,13 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_kap = distance;
         const double proj_after_kap = computeProjectedDistance();
         {
-            const double pen_end = wP * penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
-                         << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
+                         << kappa_reg << "," << lambda_reg << ","
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
         }
 
         printStageStats();
@@ -373,16 +387,20 @@ int main(int /*argc*/, char * /*argv*/[])
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         // OptLam: self_reg = lambda_reg (dynamic), kappa_reg is the constant other_reg.
         auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
-                                 double spn, double dist, double self_reg_iter, double penalty_iter) {
-            const double pd = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                                 double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
+            const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptLam," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << kappa_reg << "," << self_reg_iter << ","
-                         << penalty_iter << "\n";
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);
@@ -390,9 +408,13 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_lam = distance;
         const double proj_after_lam = computeProjectedDistance();
         {
-            const double pen_end = wP * penalty_to_lamb.eval(lambda_pf_s.toVector());
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
-                         << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
+                         << kappa_reg << "," << lambda_reg << ","
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
         }
 
         printStageStats();
@@ -460,10 +482,19 @@ int main(int /*argc*/, char * /*argv*/[])
                       << ": lambda range [" << lambdaVec.minCoeff()
                       << ", " << lambdaVec.maxCoeff() << "]  ";
             printStageStats();
-            // OptP final: no penalty term applies (P-update changes geometry, not theta).
-            const double pd_optp = computeProjectedDistance();
+            // OptP-end: P-update does not change theta, so penalty values are
+            // unchanged from OptLam-end.  We still evaluate them (vs. writing
+            // 0) so the CSV penalty trace stays continuous.  Weight columns
+            // log the wM/wL values BEFORE this stage's decay; the next
+            // stage's *_OptKap row will show the decayed values.
+            const double pd_optp  = computeProjectedDistance();
+            const double pen_kap  = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam  = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_optp << ","
-                         << kappa_reg << "," << lambda_reg << ",0\n";
+                         << kappa_reg << "," << lambda_reg << ","
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
         }
         // -------------------------------------------------------------------
 
@@ -491,7 +522,8 @@ int main(int /*argc*/, char * /*argv*/[])
             M_kappa_best    = M_kappa;
             wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
             wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
-            wP_best         = wP;
+            wP_lam_best     = wP_lam;
+            wP_kap_best     = wP_kap;
             kappa_reg_best  = kappa_reg;
             lambda_reg_best = lambda_reg;
         }
@@ -510,14 +542,17 @@ int main(int /*argc*/, char * /*argv*/[])
             M_kappa     = M_kappa_best;
             wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
             wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
-            wP          = wP_best;
+            wP_lam      = wP_lam_best;
+            wP_kap      = wP_kap_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
-            wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
+            wP_lam_growth_factor = std::max(1e-4, wP_lam_growth_factor * 0.5);
+            wP_kap_growth_factor = std::max(1e-4, wP_kap_growth_factor * 0.5);
             std::cout << "[REJECT] stage " << k
                       << ": dist=" << dist_new << ">" << dist_best
                       << " AND proj=" << proj_new << ">" << proj_best
-                      << "; revert state, wP_growth_factor -> " << wP_growth_factor << "\n";
+                      << "; revert state, wP_lam_growth -> " << wP_lam_growth_factor
+                      << ", wP_kap_growth -> " << wP_kap_growth_factor << "\n";
         }
         else if (snapshot_improves)
         {
@@ -534,8 +569,12 @@ int main(int /*argc*/, char * /*argv*/[])
         // -------------------------------------------------------------------
 
         k++;
-        if (penalty_kap >= penalty_threshold || penalty_lam >= penalty_threshold)
-            wP *= (1.0 + wP_growth_factor);
+        // Unconditional homotopy growth: safeguard (revert + shrink growth
+        // factor on REJECT) controls overshoot, so the threshold check is
+        // no longer needed.  wP_lam and wP_kap are independent and grow
+        // each stage.
+        wP_lam *= (1.0 + wP_lam_growth_factor);
+        wP_kap *= (1.0 + wP_kap_growth_factor);
 
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;

@@ -791,7 +791,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
     const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
-    const double _iter_penalty  = wP * penaltyFunc.eval(theta);
+    const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1063,7 +1063,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
     const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
-    const double _iter_penalty  = wP * penaltyFunc.eval(theta);
+    const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)

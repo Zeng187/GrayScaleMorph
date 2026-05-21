@@ -84,34 +84,27 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wL_lam             = rt["wL_lam"][0];
     RuntimeSetting.w_s                = rt["w_s"][0];
     RuntimeSetting.w_b                = rt["w_b"][0];
-    // wP: prefer the new unified "wP" field; fall back to the legacy
-    // wP_kap / wP_lam (take wP_kap as the single value) for old cfgs.
-    if (rt.contains("wP"))
-        RuntimeSetting.wP = rt["wP"][0];
-    else if (rt.contains("wP_kap"))
-        RuntimeSetting.wP = rt["wP_kap"][0];
-    else
-        RuntimeSetting.wP = 0.0;
+    // wP_lam / wP_kap: prefer the new keys; fall back to unified "wP" (used
+    // for both) or legacy "wP_kap" only key for old cfgs.
+    {
+        const double default_wP = rt.contains("wP")     ? double(rt["wP"][0])
+                                : rt.contains("wP_kap") ? double(rt["wP_kap"][0])
+                                : 0.0;
+        RuntimeSetting.wP_lam = rt.value("wP_lam", nlohmann::json::array({default_wP}))[0];
+        RuntimeSetting.wP_kap = rt.value("wP_kap", nlohmann::json::array({default_wP}))[0];
+    }
     RuntimeSetting.penalty_threshold  = rt["penalty_threshold"][0];
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];
     RuntimeSetting.stage_iter         = rt.value("stage_iter",       nlohmann::json::array({5}))[0];
-    // wP_growth_factor: prefer the unified key; fall back to the legacy
-    // per-direction keys (averaging if both present, else taking whichever
-    // is set) for old cfgs.
-    if (rt.contains("wP_growth_factor"))
+    // wP_lam_growth_factor / wP_kap_growth_factor: prefer the per-direction
+    // keys; fall back to unified "wP_growth_factor" or default 1.0.
     {
-        RuntimeSetting.wP_growth_factor = rt["wP_growth_factor"][0];
-    }
-    else if (rt.contains("wP_growth_factor_kap") || rt.contains("wP_growth_factor_lam"))
-    {
-        const double gk = rt.value("wP_growth_factor_kap", nlohmann::json::array({1.0}))[0];
-        const double gl = rt.value("wP_growth_factor_lam", nlohmann::json::array({1.0}))[0];
-        RuntimeSetting.wP_growth_factor = 0.5 * (gk + gl);
-    }
-    else
-    {
-        RuntimeSetting.wP_growth_factor = 1.0;
+        const double default_g = rt.value("wP_growth_factor", nlohmann::json::array({1.0}))[0];
+        RuntimeSetting.wP_lam_growth_factor =
+            rt.value("wP_lam_growth_factor", nlohmann::json::array({default_g}))[0];
+        RuntimeSetting.wP_kap_growth_factor =
+            rt.value("wP_kap_growth_factor", nlohmann::json::array({default_g}))[0];
     }
     RuntimeSetting.morph_method       = rt.value("morph_method",     nlohmann::json::array({std::string("homotopy")}))[0].get<std::string>();
     RuntimeSetting.joint_penalty_alpha = rt.value("joint_penalty_alpha", nlohmann::json::array({1.0}))[0];

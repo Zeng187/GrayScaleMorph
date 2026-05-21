@@ -1612,29 +1612,22 @@ MaterialJointPenaltyPerF_OptKap(IntrinsicGeometryInterface &geometry,
                                 const FaceData<double> &lambda_pf,
                                 const std::vector<double> &feasible_kapp,
                                 const std::vector<double> &feasible_lamb,
-                                double thickness,
-                                double poisson_ratio,
+                                const double &wP_lam,
+                                const double &wP_kap,
                                 double beta)
 {
   SurfaceMesh &mesh = geometry.mesh;
   const int nF = static_cast<int>(mesh.nFaces());
   const int feasible_cnt = static_cast<int>(feasible_kapp.size());
 
-  // Coefficients in the Efrati non-Euclidean plate energy distance:
-  //   a_unit = h / 4        (stretching, thickness^1)
-  //   b_unit = h^3 / 12     (bending,    thickness^3)
-  //   E_scale = E / (1 - nu)  with E fixed to 1.0 here
-  const double one_minus_nu = 1.0 - poisson_ratio;
-  const double a_unit       = thickness / 4.0;
-  const double b_unit       = thickness * thickness * thickness / 12.0;
-  const double E_scale      = 1.0 / one_minus_nu;
-
   auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
 
+  // wP_lam, wP_kap captured by reference: the outer loop grows them stage
+  // by stage and the penalty automatically reads the latest values.
   func.add_elements<1>(
       TinyAD::range(mesh.nFaces()),
       [&lambda_pf, feasible_kapp, feasible_lamb, feasible_cnt,
-       a_unit, b_unit, E_scale, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+       &wP_lam, &wP_kap, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
@@ -1642,25 +1635,19 @@ MaterialJointPenaltyPerF_OptKap(IntrinsicGeometryInterface &geometry,
         const double lam_f  = lambda_pf[mesh.face(f_idx)];
         const double lam_sq = lam_f * lam_f;
 
-        // Hard min over (kappa_j, lambda_j) candidate pairs using the
-        // strict SV-energy distance.  Argmin chooses a *single* index j*;
-        // TinyAD only tracks autodiff through the surviving (kap-kappa_j*)^2
-        // term (the stretching term is constant w.r.t. kap here since
-        // lambda is held fixed during OptKap).
         T r = T(1e30);
         for (int j = 0; j < feasible_cnt; ++j)
         {
-          // Stretching term (constant w.r.t. autodiff kap)
+          // Stretching term (constant w.r.t. autodiff kap during OptKap)
           const double feas_lam_sq = feasible_lamb[j] * feasible_lamb[j];
           const double dlsq        = lam_sq - feas_lam_sq;
-          const double lam_term    = E_scale * a_unit * dlsq * dlsq;
+          const double lam_term    = wP_lam * dlsq * dlsq;
 
           // Bending term (autodiff in kap)
           T d_kap    = kap - T(feasible_kapp[j]);
-          T kap_term = T(E_scale * b_unit) * d_kap * d_kap;
+          T kap_term = T(wP_kap) * d_kap * d_kap;
 
-          // Multiply by candidate area element sqrt(det(gbar_j)) = lambdabar_j^2.
-          T dist2 = (T(lam_term) + kap_term) * T(feas_lam_sq);
+          T dist2 = T(lam_term) + kap_term;
           if (dist2 < r)
             r = dist2;
         }
@@ -1675,34 +1662,26 @@ MaterialJointPenaltyPerF_OptLam(IntrinsicGeometryInterface &geometry,
                                 const FaceData<double> &kappa_pf,
                                 const std::vector<double> &feasible_kapp,
                                 const std::vector<double> &feasible_lamb,
-                                double thickness,
-                                double poisson_ratio,
+                                const double &wP_lam,
+                                const double &wP_kap,
                                 double beta)
 {
   SurfaceMesh &mesh = geometry.mesh;
   const int nF = static_cast<int>(mesh.nFaces());
   const int feasible_cnt = static_cast<int>(feasible_kapp.size());
 
-  const double one_minus_nu = 1.0 - poisson_ratio;
-  const double a_unit       = thickness / 4.0;
-  const double b_unit       = thickness * thickness * thickness / 12.0;
-  const double E_scale      = 1.0 / one_minus_nu;
-
   auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
 
   func.add_elements<1>(
       TinyAD::range(mesh.nFaces()),
       [&kappa_pf, feasible_kapp, feasible_lamb, feasible_cnt,
-       a_unit, b_unit, E_scale, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
+       &wP_lam, &wP_kap, beta, nF, &mesh](auto &element) -> TINYAD_SCALAR_TYPE(element)
       {
         using T = TINYAD_SCALAR_TYPE(element);
         Eigen::Index f_idx = element.handle;
         T lam = element.variables(f_idx)(0);
         const double kap_f = kappa_pf[mesh.face(f_idx)];
 
-        // OptLam: lambda is the AD variable (so lam^2 is autodiff-tracked),
-        // kappa is constant.  Stretching term is now AD-tracked; bending
-        // term is constant per candidate.
         T lam_sq = lam * lam;
 
         T r = T(1e30);
@@ -1711,13 +1690,13 @@ MaterialJointPenaltyPerF_OptLam(IntrinsicGeometryInterface &geometry,
           // Stretching term (autodiff in lam)
           const double feas_lam_sq = feasible_lamb[j] * feasible_lamb[j];
           T dlsq = lam_sq - T(feas_lam_sq);
-          T lam_term = T(E_scale * a_unit) * dlsq * dlsq;
+          T lam_term = T(wP_lam) * dlsq * dlsq;
 
-          // Bending term (constant)
+          // Bending term (constant w.r.t. autodiff lam)
           const double d_kap    = kap_f - feasible_kapp[j];
-          const double kap_term = E_scale * b_unit * d_kap * d_kap;
+          const double kap_term = wP_kap * d_kap * d_kap;
 
-          T dist2 = (lam_term + T(kap_term)) * T(feas_lam_sq);
+          T dist2 = lam_term + T(kap_term);
           if (dist2 < r)
             r = dist2;
         }

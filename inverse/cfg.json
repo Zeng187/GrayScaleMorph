@@ -15,12 +15,14 @@
 		"wL_lam": [ 0.01 ],
 		"w_s": [ 1 ],
 		"w_b": [ 1 ],
-		"wP": [ 0.1 ],
+		"wP_lam": [ 0.1 ],
+		"wP_kap": [ 0.1 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 100 ],
 		"snap_before_P": [ false ],
 		"stage_iter": [ 10 ],
-		"wP_growth_factor": [ 1.0 ],
+		"wP_lam_growth_factor": [ 1.0 ],
+		"wP_kap_growth_factor": [ 1.0 ],
 		"morph_method": [ "homotopy" ]
 	}
 }
