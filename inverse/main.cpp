@@ -295,12 +295,18 @@ int main(int /*argc*/, char * /*argv*/[])
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
     // CSV trajectory log of every SGN iter's (spn, dist) plus end-of-substage
-    // markers, written to morph_dir/iter_log.csv.  Schema:
-    //   stage, substage, iter, spn, dist
+    // markers, written under MorphLogsDir / {method} / {model} / so different
+    // morph methods (homotopy, mgda, ste, ...) write to disjoint dirs.
+    // Schema:  stage, substage, iter, spn, dist
     // where substage in {OptKap, OptLam, OptP}, iter is the SGN inner-iter
     // index (-1 marks an end-of-substage "final" row).
-    std::ofstream iter_log_ofs(morph_dir + "iter_log.csv");
+    const std::string morphlogs_dir = config.PathSetting.MorphLogsDir
+                                    + config.RuntimeSetting.morph_method + "/"
+                                    + model + "/";
+    std::filesystem::create_directories(morphlogs_dir);
+    std::ofstream iter_log_ofs(morphlogs_dir + "iter_log.csv");
     iter_log_ofs << "stage,substage,iter,spn,dist\n";
+    spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
 
     // Dynamic wP growth, expressed as a multiplicative *increment* factor:
     //   wP_new = wP * (1 + wP_growth_factor)

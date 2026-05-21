@@ -303,9 +303,16 @@ int main(int argc, char* argv[])
         double lambda_reg_best = lambda_reg;
         double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
 
-        // Per-patch CSV log: stage,substage,iter,spn,dist.
-        std::ofstream iter_log_ofs(morph_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
+        // Per-patch CSV log: written under MorphLogsDir/{method}/{model}/.
+        // Schema: stage,substage,iter,spn,dist.
+        const std::string morphlogs_dir = config.PathSetting.MorphLogsDir
+                                        + config.RuntimeSetting.morph_method + "/"
+                                        + model + "/";
+        std::filesystem::create_directories(morphlogs_dir);
+        std::ofstream iter_log_ofs(morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
         iter_log_ofs << "stage,substage,iter,spn,dist\n";
+        spdlog::info("Patch {} iter log -> {}", pd.idx,
+                     morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
 
         while (k < stage_iter)
         {

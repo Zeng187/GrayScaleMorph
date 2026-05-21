@@ -51,6 +51,7 @@ Config::Config(const std::string& filePath) {
     PathSetting.DesignDir     = p["DesignDir"][0];
     PathSetting.TargetDir     = p["TargetDir"][0];
     PathSetting.MorphDir      = p["MorphDir"][0];
+    PathSetting.MorphLogsDir  = p.value("MorphLogsDir", nlohmann::json::array({"../../Resources/2_morphlogs/"}))[0];
     PathSetting.ParamDir      = p["ParamDir"][0];
     PathSetting.CondDir       = p["CondDir"][0];
     PathSetting.ForwardDir    = p["ForwardDir"][0];
@@ -90,6 +91,7 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];
     RuntimeSetting.stage_iter         = rt.value("stage_iter",       nlohmann::json::array({5}))[0];
     RuntimeSetting.wP_growth_factor   = rt.value("wP_growth_factor", nlohmann::json::array({1.0}))[0];
+    RuntimeSetting.morph_method       = rt.value("morph_method",     nlohmann::json::array({std::string("homotopy")}))[0].get<std::string>();
 }
 
 std::string Config::materialJsonPath() const

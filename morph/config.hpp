@@ -29,6 +29,7 @@ public:
         std::string DesignDir;
         std::string TargetDir;
         std::string MorphDir;
+        std::string MorphLogsDir;
         std::string ParamDir;
         std::string CondDir;
         std::string ForwardDir;
@@ -70,6 +71,7 @@ public:
         bool   snap_before_P;       // hard-snap (lambda, kappa) to nearest feasible before each P-update
         int    stage_iter;          // outer alternating-stage count
         double wP_growth_factor;    // initial value of (1 + factor) homotopy step; halved on REJECT
+        std::string morph_method;   // subdir name under MorphLogsDir; e.g. "homotopy", "mgda"
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

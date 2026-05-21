@@ -20,7 +20,8 @@
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 100 ],
 		"snap_before_P": [ false ],
-		"stage_iter": [ 5 ],
-		"wP_growth_factor": [ 1.0 ]
+		"stage_iter": [ 10 ],
+		"wP_growth_factor": [ 1.0 ],
+		"morph_method": [ "homotopy" ]
 	}
 }
