@@ -1277,7 +1277,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     const std::function<void(const Eigen::VectorXd&)>& callback,
     const SgnIterCallback& iter_cb,
     const std::vector<double>& cand_other,
-    const std::vector<double>& other_const)
+    const std::vector<double>& other_const,
+    double alpha_override)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1441,7 +1442,10 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     }
 
     // MGDA combine (Newton-step level).
-    const double alpha = mgda_alpha(deltaTheta_F, d_P);
+    // Closed-form MGDA alpha unless the caller imposed a stage-wise override.
+    const double alpha = (alpha_override >= 0.0)
+                       ? std::clamp(alpha_override, 0.0, 1.0)
+                       : mgda_alpha(deltaTheta_F, d_P);
     const Eigen::VectorXd d = alpha * deltaTheta_F + (1.0 - alpha) * d_P;
     last_alpha = alpha;
 
@@ -1549,7 +1553,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     const std::function<void(const Eigen::VectorXd&)>& callback,
     const SgnIterCallback& iter_cb,
     const std::vector<double>& cand_other,
-    const std::vector<double>& other_const)
+    const std::vector<double>& other_const,
+    double alpha_override)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1703,7 +1708,10 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
       d_P = dP_joint2d(theta, candidate_vals, cand_other, other_const);
     }
 
-    const double alpha = mgda_alpha(deltaTheta_F, d_P);
+    // Closed-form MGDA alpha unless the caller imposed a stage-wise override.
+    const double alpha = (alpha_override >= 0.0)
+                       ? std::clamp(alpha_override, 0.0, 1.0)
+                       : mgda_alpha(deltaTheta_F, d_P);
     const Eigen::VectorXd d = alpha * deltaTheta_F + (1.0 - alpha) * d_P;
     last_alpha = alpha;
 

@@ -224,7 +224,12 @@ const SgnIterCallback& iter_cb = sgn_iter_noop,
 // candidate_vals[j])^2 + (other_const_f - cand_other[j])^2], snap target
 // = candidate_vals[j*].  other_const must have length == nF.
 const std::vector<double>& cand_other  = std::vector<double>{},
-const std::vector<double>& other_const = std::vector<double>{});
+const std::vector<double>& other_const = std::vector<double>{},
+// Override the closed-form MGDA alpha (combination weight for d_F vs d_P).
+// Negative -> use the standard mgda_alpha(d_F, d_P).  Non-negative in
+// [0, 1] -> bypass the closed-form and use this value directly so the
+// caller can impose a stage-wise alpha schedule.
+double alpha_override = -1.0);
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
@@ -261,4 +266,5 @@ const SgnIterCallback& iter_cb = sgn_iter_noop,
 // See FixLam_OptKap_MGDA above; same semantics.  Pass cand_other &
 // other_const non-empty to switch d_P to 2D Euclidean joint snap.
 const std::vector<double>& cand_other  = std::vector<double>{},
-const std::vector<double>& other_const = std::vector<double>{});
+const std::vector<double>& other_const = std::vector<double>{},
+double alpha_override = -1.0);

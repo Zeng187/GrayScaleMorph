@@ -1,7 +1,7 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "beetle_simp" ],
+		"ModelName":    [ "foot_brace3" ],
 		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
@@ -19,9 +19,13 @@
 		"wP_lam": [ 0.0 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 256 ],
-		"stage_iter": [ 5 ],
+		"stage_iter": [ 10 ],
 		"warmup_stages": [ 1 ],
 		"warmup_reg_decay": [ 1.0 ],
+		"mgda_reg_decay": [ 0.5 ],
+		"mgda_alpha_start": [ 0.9 ],
+		"mgda_alpha_end": [ 0.1 ],
+		"mgda_alpha_decay_exp": [ 2.0 ],
 		"morph_method": [ "mgda" ]
 	}
 }

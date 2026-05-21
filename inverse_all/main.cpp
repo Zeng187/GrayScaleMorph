@@ -481,6 +481,15 @@ int main(int /*argc*/, char* /*argv*/[])
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness,
                                                                       config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             // 1D penalty path: cand_other / other_const default-empty -> SGN d_P = 1D snap.
+            // Power-law alpha schedule.  exp=1 linear; exp>1 stays near start longer.
+            const double a_start = config.RuntimeSetting.mgda_alpha_start;
+            const double a_end   = config.RuntimeSetting.mgda_alpha_end;
+            const double a_exp   = config.RuntimeSetting.mgda_alpha_decay_exp;
+            double alpha_k = -1.0;
+            if (a_start >= 0.0 && a_end >= 0.0 && stage_iter > 1) {
+                const double t = double(k) / double(stage_iter - 1);
+                alpha_k = a_end + (a_start - a_end) * std::pow(1.0 - t, a_exp);
+            }
             Vr = sparse_gauss_newton_FixLam_OptKap_MGDA(
                      geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                      adjointFunc_OptKap, penalty_to_kapp,
@@ -490,7 +499,9 @@ int main(int /*argc*/, char* /*argv*/[])
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                      distance, spn_energy, self_reg, penalty_kap_val, pareto_kap,
                      [](const auto&){},
-                     makeIterLogger(k, "OptKap"));
+                     makeIterLogger(k, "OptKap"),
+                     /*cand_other=*/{}, /*other_const=*/{},
+                     /*alpha_override=*/alpha_k);
             kappa_reg = self_reg;
             printStageStats();
             writeSummaryRow(k, "OptKap");
@@ -508,7 +519,9 @@ int main(int /*argc*/, char* /*argv*/[])
                      E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                      distance, spn_energy, self_reg, penalty_lam_val, pareto_lam,
                      [](const auto&){},
-                     makeIterLogger(k, "OptLam"));
+                     makeIterLogger(k, "OptLam"),
+                     /*cand_other=*/{}, /*other_const=*/{},
+                     /*alpha_override=*/alpha_k);
             lambda_reg = self_reg;
             printStageStats();
             writeSummaryRow(k, "OptLam");
@@ -562,6 +575,16 @@ int main(int /*argc*/, char* /*argv*/[])
             // -------------------------------------------------------------------
 
             k++;
+
+            // Homotopy-style reg decay between MGDA stages: F = dist + reg
+            // slowly slims toward F = dist.  Default 1.0 = no decay.
+            {
+                const double mgda_decay = config.RuntimeSetting.mgda_reg_decay;
+                wM_kap *= mgda_decay;  wL_kap *= mgda_decay;
+                wM_lam *= mgda_decay;  wL_lam *= mgda_decay;
+                kappa_reg  = computeKappaReg();
+                lambda_reg = computeLambdaReg();
+            }
 
             printf("--------------------------------------------------------------------------\n");
         }

@@ -91,6 +91,10 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.stage_iter         = rt.value("stage_iter",        nlohmann::json::array({5}))[0];
     RuntimeSetting.warmup_stages      = rt.value("warmup_stages",     nlohmann::json::array({1}))[0];
     RuntimeSetting.warmup_reg_decay   = rt.value("warmup_reg_decay",  nlohmann::json::array({1.0}))[0];
+    RuntimeSetting.mgda_reg_decay     = rt.value("mgda_reg_decay",    nlohmann::json::array({1.0}))[0];
+    RuntimeSetting.mgda_alpha_start     = rt.value("mgda_alpha_start",     nlohmann::json::array({-1.0}))[0];
+    RuntimeSetting.mgda_alpha_end       = rt.value("mgda_alpha_end",       nlohmann::json::array({-1.0}))[0];
+    RuntimeSetting.mgda_alpha_decay_exp = rt.value("mgda_alpha_decay_exp", nlohmann::json::array({1.0}))[0];
     RuntimeSetting.morph_method       = rt.value("morph_method",      nlohmann::json::array({std::string("mgda")}))[0].get<std::string>();
     RuntimeSetting.whole_mesh_mode    = rt.value("WholeMeshMode",     nlohmann::json::array({false}))[0];
     RuntimeSetting.init_from_param    = rt.value("InitFromParam",     nlohmann::json::array({false}))[0];

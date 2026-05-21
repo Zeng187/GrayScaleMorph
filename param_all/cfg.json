@@ -1,8 +1,8 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "beetle_simp" ],
-		"MaterialName": [ "largedeform-material" ],
+		"ModelName":    [ "foot_brace3" ],
+		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
 	"RuntimeSettings": {

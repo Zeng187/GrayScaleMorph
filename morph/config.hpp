@@ -71,6 +71,11 @@ public:
         int    stage_iter;
         int    warmup_stages;
         double warmup_reg_decay;
+        double mgda_reg_decay;
+        double mgda_alpha_start;   // per-stage alpha schedule, from start@stage 0
+        double mgda_alpha_end;     // to end@stage N-1.  Negative -> fallback to closed-form alpha.
+        double mgda_alpha_decay_exp;  // schedule shape: alpha_k = end + (start - end) * (1 - k/(N-1))^exp
+                                      // exp = 1.0 -> linear; exp > 1 -> stay near start longer (favor d_F).
         std::string morph_method;
         // Forward-only knobs (default false → legacy patch_0_ + target-V behavior).
         // WholeMeshMode  : read {model}_param.obj + {model}_bound_center.txt
