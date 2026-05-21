@@ -29,6 +29,7 @@ public:
         std::string DesignDir;
         std::string TargetDir;
         std::string MorphDir;
+        std::string MorphLogsDir;
         std::string ParamDir;
         std::string CondDir;
         std::string ForwardDir;
@@ -67,9 +68,19 @@ public:
         double wP_lam;
         double penalty_threshold;
         double betaP;
-        bool   snap_before_P;
         int    stage_iter;
         int    warmup_stages;
+        double warmup_reg_decay;
+        std::string morph_method;
+        // Forward-only knobs (default false → legacy patch_0_ + target-V behavior).
+        // WholeMeshMode  : read {model}_param.obj + {model}_bound_center.txt
+        //                  instead of patch_0_P.obj + patch_0_bound_center.txt.
+        // InitFromParam  : skip reading target V; initialize Newton with
+        //                  P + tiny random z perturbation. Use this for
+        //                  forward-only synthetic shapes that have no
+        //                  reference 3D target.
+        bool   whole_mesh_mode;
+        bool   init_from_param;
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

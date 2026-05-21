@@ -8,22 +8,26 @@
 #include <functional>
 
 // Per-SGN-iter metrics callback.  Called at the end of each Newton iteration
-// inside the *_MGDA and non-penalty SGN functions so the host (main.cpp)
-// can stream a row into a CSV / metrics file.
+// inside *_MGDA and the non-penalty / penalty SGN functions so the host
+// (main.cpp) can stream a row into a CSV / metrics file.  Mirrors the
+// signature used by S2_GrayScaleMorph's iter_logger for cross-method CSV
+// compatibility.
 //   iter      : 0-based iter index inside the SGN call
-//   F         : SPN energy (distance + self_reg + other_reg [+ wP*phi for non-MGDA])
+//   x_iter    : flat 3*nV vector of the SGN's current vertex positions,
+//               so the caller can compute proj_dist at this exact state
+//   spn       : SPN energy = distance + self_reg + other_reg [+ wP*phi]
 //   distance  : mass-weighted distance to target
-//   phi       : feasibility penalty value (0 for non-penalty SGN)
 //   self_reg  : regulariser of the variable currently being optimised
-//   other_reg : regulariser of the variable currently held constant
+//   penalty   : feasibility penalty value (= wP*phi for penalty variants,
+//               = phi for MGDA variants, = 0 for non-penalty SGN)
 using SgnIterCallback = std::function<void(int iter,
-                                           double F,
+                                           const Eigen::VectorXd& x_iter,
+                                           double spn,
                                            double distance,
-                                           double phi,
                                            double self_reg,
-                                           double other_reg)>;
+                                           double penalty)>;
 
-inline const SgnIterCallback sgn_iter_noop = [](int, double, double, double, double, double){};
+inline const SgnIterCallback sgn_iter_noop = [](int, const Eigen::VectorXd&, double, double, double, double){};
 
 template <class Func, class Solver>
 void newton(
@@ -194,7 +198,7 @@ const Eigen::VectorXd& masses,
 double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-const std::vector<double>& candidate_vals,
+const std::vector<double>& candidate_vals,    // 1D candidates for the optimised variable
 double betaP,
 const std::vector<int>& fixedIdx,
 int max_iters,
@@ -213,7 +217,14 @@ double& final_self_reg,
 double& final_penalty,
 double& final_pareto_norm,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
-const SgnIterCallback& iter_cb = sgn_iter_noop);
+const SgnIterCallback& iter_cb = sgn_iter_noop,
+// Optional 2D-joint penalty inputs.  When cand_other is empty (default),
+// d_P uses 1D snap on candidate_vals.  When cand_other is non-empty,
+// d_P uses 2D Euclidean joint snap: pick j* = arg min_j [(theta_self -
+// candidate_vals[j])^2 + (other_const_f - cand_other[j])^2], snap target
+// = candidate_vals[j*].  other_const must have length == nF.
+const std::vector<double>& cand_other  = std::vector<double>{},
+const std::vector<double>& other_const = std::vector<double>{});
 
 
 Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
@@ -227,7 +238,7 @@ const Eigen::VectorXd& masses,
 double other_reg,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
 const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-const std::vector<double>& candidate_vals,
+const std::vector<double>& candidate_vals,    // 1D candidates for the optimised variable
 double betaP,
 const std::vector<int>& fixedIdx,
 int max_iters,
@@ -246,4 +257,8 @@ double& final_self_reg,
 double& final_penalty,
 double& final_pareto_norm,
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {},
-const SgnIterCallback& iter_cb = sgn_iter_noop);
+const SgnIterCallback& iter_cb = sgn_iter_noop,
+// See FixLam_OptKap_MGDA above; same semantics.  Pass cand_other &
+// other_const non-empty to switch d_P to 2D Euclidean joint snap.
+const std::vector<double>& cand_other  = std::vector<double>{},
+const std::vector<double>& other_const = std::vector<double>{});

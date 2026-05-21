@@ -1602,3 +1602,100 @@ MaterialPenaltyFunctionPerF(IntrinsicGeometryInterface &geometry,
 
   return func;
 }
+
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialPenaltyFunctionPerF_Efrati(IntrinsicGeometryInterface &geometry,
+                                   const std::vector<double> &cand_self,
+                                   const std::vector<double> &cand_other,
+                                   const std::vector<double> &other_const,
+                                   double E,
+                                   double nu,
+                                   double h,
+                                   double beta,
+                                   bool self_is_kappa)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nF      = static_cast<int>(mesh.nFaces());
+  const int cnt     = static_cast<int>(cand_self.size());
+
+  const double C_pre  = E / (1.0 - nu);
+  const double C_str  = h / 4.0;
+  const double C_bend = (h * h * h) / 12.0;
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
+  func.add_elements<1>(
+      TinyAD::range(mesh.nFaces()),
+      [&, cand_self, cand_other, other_const,
+       beta, nF, cnt, C_pre, C_str, C_bend, self_is_kappa]
+      (auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+        T theta = element.variables(f_idx)(0);
+        const double other_f = other_const[static_cast<size_t>(f_idx)];
+
+        T r = T(1e30);
+        for (int j = 0; j < cnt; ++j)
+        {
+          const double lam_bar = self_is_kappa ? cand_other[j] : cand_self[j];
+          const double kap_bar = self_is_kappa ? cand_self[j]  : cand_other[j];
+          const double lam_bar_sq = lam_bar * lam_bar;
+
+          T lam, kap;
+          if (self_is_kappa) { lam = T(other_f); kap = theta;        }
+          else               { lam = theta;       kap = T(other_f);   }
+
+          T lam_str  = lam * lam - T(lam_bar_sq);    // (lambda^2 - lambda_bar^2)
+          T kap_bend = kap - T(kap_bar);              // (kappa - kappa_bar)
+          T d2 = T(lam_bar_sq) * T(C_pre)
+               * (T(C_str)  * lam_str  * lam_str
+                + T(C_bend) * kap_bend * kap_bend);
+          if (d2 < r) r = d2;
+        }
+        return T(beta) * r / T(nF);
+      });
+
+  return func;
+}
+
+
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialPenaltyFunctionPerF_Joint2D(IntrinsicGeometryInterface &geometry,
+                                    const std::vector<double> &cand_self,
+                                    const std::vector<double> &cand_other,
+                                    const std::vector<double> &other_const,
+                                    double beta,
+                                    bool self_is_kappa)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+  const int nF  = static_cast<int>(mesh.nFaces());
+  const int cnt = static_cast<int>(cand_self.size());
+  (void)self_is_kappa;  // symmetric formula: which variable is "self" doesn't matter for the 2D Euclidean form
+
+  auto func = TinyAD::scalar_function<1>(TinyAD::range(mesh.nFaces()));
+  func.add_elements<1>(
+      TinyAD::range(mesh.nFaces()),
+      [&, cand_self, cand_other, other_const, beta, nF, cnt]
+      (auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+        T theta = element.variables(f_idx)(0);
+        const double other_f = other_const[static_cast<size_t>(f_idx)];
+
+        T r = T(1e30);
+        for (int j = 0; j < cnt; ++j)
+        {
+          const double s_bar = cand_self[j];
+          const double o_bar = cand_other[j];
+          T      d_self  = theta - T(s_bar);
+          double d_other = other_f - o_bar;
+          T d2 = d_self * d_self + T(d_other * d_other);
+          if (d2 < r) r = d2;
+        }
+        return T(beta) * r / T(nF);
+      });
+
+  return func;
+}

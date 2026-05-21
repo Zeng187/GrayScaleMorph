@@ -6,6 +6,8 @@
 #include "timer.h"
 
 #include <TinyAD/Utils/NewtonDecrement.hh>
+#include <cmath>
+#include <limits>
 
 using namespace geometrycentral::surface;
 
@@ -307,7 +309,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
               << "\tSPN energy: " << iter_F
               << "\tDistance: " << iter_d
               << "\tStep size: " << s << std::endl;
-    iter_cb(i, iter_F, iter_d, /*phi=*/0.0, /*self_reg=*/iter_sr, other_reg);
+    iter_cb(i, x, iter_F, iter_d, iter_sr, /*penalty=*/0.0);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
 
@@ -557,7 +559,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
               << "\tSPN energy: " << iter_F
               << "\tDistance: " << iter_d
               << "\tStep size: " << s << std::endl;
-    iter_cb(i, iter_F, iter_d, /*phi=*/0.0, /*self_reg=*/iter_sr, other_reg);
+    iter_cb(i, x, iter_F, iter_d, iter_sr, /*penalty=*/0.0);
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -1120,6 +1122,126 @@ inline Eigen::VectorXd snap_vector(const Eigen::VectorXd& th,
   return s;
 }
 
+// Efrati elastic-strain-energy distance² (per face) between current
+// (lambda, kappa) and feasible pair j:
+//   d²_j = lambda_bar_j² * (E/(1-nu)) * [ (h/4)*(lambda² - lambda_bar_j²)²
+//                                        + (h³/12)*(kappa - kappa_bar_j)² ]
+// self_is_kappa selects which variable `theta` represents.  Returns the
+// index of the nearest candidate (Voronoi cell j*) for this face.
+inline int nearest_efrati_index(double theta_self,
+                                double other_const_f,
+                                const std::vector<double>& cand_self,
+                                const std::vector<double>& cand_other,
+                                double E, double nu, double h,
+                                bool self_is_kappa)
+{
+  const double C_pre  = E / (1.0 - nu);
+  const double C_str  = h / 4.0;
+  const double C_bend = (h * h * h) / 12.0;
+  int best = 0; double best_d2 = std::numeric_limits<double>::infinity();
+  for(size_t j = 0; j < cand_self.size(); ++j)
+  {
+    const double lam_bar = self_is_kappa ? cand_other[j] : cand_self[j];
+    const double kap_bar = self_is_kappa ? cand_self[j]  : cand_other[j];
+    const double lam = self_is_kappa ? other_const_f : theta_self;
+    const double kap = self_is_kappa ? theta_self    : other_const_f;
+    const double lam_str  = lam * lam - lam_bar * lam_bar;
+    const double kap_bend = kap - kap_bar;
+    const double d2 = lam_bar * lam_bar * C_pre
+                    * (C_str  * lam_str  * lam_str
+                     + C_bend * kap_bend * kap_bend);
+    if(d2 < best_d2) { best_d2 = d2; best = static_cast<int>(j); }
+  }
+  return best;
+}
+
+// d_P for OptKap (self = kappa).  H is constant in cell j*, so the Newton
+// step reduces to a snap: d_P_f = kappa_bar_{j*} - kappa_f.
+inline Eigen::VectorXd dP_efrati_optkap(const Eigen::VectorXd& kappa,
+                                        const std::vector<double>& cand_kap,
+                                        const std::vector<double>& cand_lam,
+                                        const std::vector<double>& lambda_const,
+                                        double E, double nu, double h)
+{
+  Eigen::VectorXd d(kappa.size());
+  for(int f = 0; f < kappa.size(); ++f)
+  {
+    const int j = nearest_efrati_index(kappa(f), lambda_const[f],
+                                       cand_kap, cand_lam, E, nu, h,
+                                       /*self_is_kappa=*/true);
+    d(f) = cand_kap[j] - kappa(f);
+  }
+  return d;
+}
+
+// d_P for OptLam (self = lambda).  In cell j*:
+//   g = lambda_bar² * (E h/(1-nu)) * lambda * (lambda² - lambda_bar²)
+//   H = lambda_bar² * (E h/(1-nu)) * (3 lambda² - lambda_bar²)
+//   d = -g / H
+// If H is too small / non-positive (lambda << lambda_bar/sqrt(3)), fall
+// back to a simple snap d = lambda_bar - lambda to avoid divide-by-zero
+// and over-shoot.
+inline Eigen::VectorXd dP_efrati_optlam(const Eigen::VectorXd& lambda,
+                                        const std::vector<double>& cand_lam,
+                                        const std::vector<double>& cand_kap,
+                                        const std::vector<double>& kappa_const,
+                                        double E, double nu, double h)
+{
+  const double H_guard = 1e-12;
+  Eigen::VectorXd d(lambda.size());
+  for(int f = 0; f < lambda.size(); ++f)
+  {
+    const int j = nearest_efrati_index(lambda(f), kappa_const[f],
+                                       cand_lam, cand_kap, E, nu, h,
+                                       /*self_is_kappa=*/false);
+    const double lb = cand_lam[j];
+    const double l  = lambda(f);
+    const double lb_sq = lb * lb;
+    const double l_sq  = l * l;
+    const double H_factor = 3.0 * l_sq - lb_sq;
+    if(std::abs(H_factor) < H_guard)
+      d(f) = lb - l;  // fallback
+    else
+      d(f) = -l * (l_sq - lb_sq) / H_factor;
+  }
+  return d;
+}
+
+// 2D Euclidean joint snap (no physics weighting).  Penalty per face:
+//   d²_j = (theta_self - cand_self[j])² + (other_const_f - cand_other[j])²
+// Hessian wrt theta_self is the constant (2β/nF), so Newton step is the
+// simple snap d_P = cand_self[j*] - theta_self with j* = arg min d²_j.
+// Works for both OptKap and OptLam (symmetric formula).
+inline int nearest_joint2d_index(double theta_self,
+                                 double other_const_f,
+                                 const std::vector<double>& cand_self,
+                                 const std::vector<double>& cand_other)
+{
+  int best = 0; double best_d2 = std::numeric_limits<double>::infinity();
+  for(size_t j = 0; j < cand_self.size(); ++j)
+  {
+    const double ds = theta_self    - cand_self[j];
+    const double dot = other_const_f - cand_other[j];
+    const double d2 = ds * ds + dot * dot;
+    if(d2 < best_d2) { best_d2 = d2; best = static_cast<int>(j); }
+  }
+  return best;
+}
+
+inline Eigen::VectorXd dP_joint2d(const Eigen::VectorXd& theta,
+                                  const std::vector<double>& cand_self,
+                                  const std::vector<double>& cand_other,
+                                  const std::vector<double>& other_const)
+{
+  Eigen::VectorXd d(theta.size());
+  for(int f = 0; f < theta.size(); ++f)
+  {
+    const int j = nearest_joint2d_index(theta(f), other_const[f], cand_self, cand_other);
+    d(f) = cand_self[j] - theta(f);
+  }
+  return d;
+}
+
 } // anonymous
 
 
@@ -1134,7 +1256,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     double other_reg,
     const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
     const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-    const std::vector<double>& candidate_vals,
+    const std::vector<double>& candidate_vals,    // 1D candidates for the optimised variable
     double betaP,
     const std::vector<int>& fixedIdx,
     int max_iters,
@@ -1153,7 +1275,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     double& final_penalty,
     double& final_pareto_norm,
     const std::function<void(const Eigen::VectorXd&)>& callback,
-    const SgnIterCallback& iter_cb)
+    const SgnIterCallback& iter_cb,
+    const std::vector<double>& cand_other,
+    const std::vector<double>& other_const)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1302,9 +1426,19 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
     deltaTheta_F = d_kkt.segment(x.size() - fixedIdx.size(), theta.size());
     deltaX_F     = P.transpose() * d_kkt.segment(0, x.size() - fixedIdx.size());
 
-    // Newton direction for Phi (closed form, hard-min Hessian ~ (2*beta/nF)*I).
-    const Eigen::VectorXd snap_theta = snap_vector(theta, candidate_vals);
-    const Eigen::VectorXd d_P = snap_theta - theta;
+    // Newton direction for Phi:
+    //  - cand_other empty -> 1D independent hard-min penalty (closed form,
+    //    snap to nearest 1D candidate on candidate_vals)
+    //  - cand_other non-empty -> 2D Euclidean joint penalty (closed form,
+    //    snap to candidate_vals[j*] where j* picks the (cand_self,cand_other)
+    //    pair nearest to (theta, other_const_f) in plain 2D)
+    Eigen::VectorXd d_P;
+    if (cand_other.empty()) {
+      const Eigen::VectorXd snap_theta = snap_vector(theta, candidate_vals);
+      d_P = snap_theta - theta;
+    } else {
+      d_P = dP_joint2d(theta, candidate_vals, cand_other, other_const);
+    }
 
     // MGDA combine (Newton-step level).
     const double alpha = mgda_alpha(deltaTheta_F, d_P);
@@ -1359,7 +1493,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_MGDA(
               << "  Phi=" << f_P
               << "  dist=" << iter_dist
               << "  step=" << s << "\n";
-    iter_cb(i, f_F, iter_dist, f_P, iter_self_reg, other_reg);
+    iter_cb(i, x, f_F, iter_dist, iter_self_reg, /*penalty=*/f_P);
 
     callback(x);
   }
@@ -1394,7 +1528,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     double other_reg,
     const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
     const TinyAD::ScalarFunction<1, double, Eigen::Index>& penaltyFunc,
-    const std::vector<double>& candidate_vals,
+    const std::vector<double>& candidate_vals,    // 1D candidates for the optimised variable
     double betaP,
     const std::vector<int>& fixedIdx,
     int max_iters,
@@ -1413,7 +1547,9 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     double& final_penalty,
     double& final_pareto_norm,
     const std::function<void(const Eigen::VectorXd&)>& callback,
-    const SgnIterCallback& iter_cb)
+    const SgnIterCallback& iter_cb,
+    const std::vector<double>& cand_other,
+    const std::vector<double>& other_const)
 {
   geometry.requireFaceAreas();
   geometry.requireVertexIndices();
@@ -1553,8 +1689,19 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
     deltaTheta_F = d_kkt.segment(x.size() - fixedIdx.size(), theta.size());
     deltaX_F     = P.transpose() * d_kkt.segment(0, x.size() - fixedIdx.size());
 
-    const Eigen::VectorXd snap_theta = snap_vector(theta, candidate_vals);
-    const Eigen::VectorXd d_P = snap_theta - theta;
+    // Newton direction for Phi:
+    //  - cand_other empty -> 1D independent hard-min penalty (closed form,
+    //    snap to nearest 1D candidate on candidate_vals)
+    //  - cand_other non-empty -> 2D Euclidean joint penalty (closed form,
+    //    snap to candidate_vals[j*] where j* picks the (cand_self,cand_other)
+    //    pair nearest to (theta, other_const_f) in plain 2D)
+    Eigen::VectorXd d_P;
+    if (cand_other.empty()) {
+      const Eigen::VectorXd snap_theta = snap_vector(theta, candidate_vals);
+      d_P = snap_theta - theta;
+    } else {
+      d_P = dP_joint2d(theta, candidate_vals, cand_other, other_const);
+    }
 
     const double alpha = mgda_alpha(deltaTheta_F, d_P);
     const Eigen::VectorXd d = alpha * deltaTheta_F + (1.0 - alpha) * d_P;
@@ -1605,7 +1752,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
               << "  Phi=" << f_P
               << "  dist=" << iter_dist
               << "  step=" << s << "\n";
-    iter_cb(i, f_F, iter_dist, f_P, iter_self_reg, other_reg);
+    iter_cb(i, x, f_F, iter_dist, iter_self_reg, /*penalty=*/f_P);
 
     callback(x);
   }

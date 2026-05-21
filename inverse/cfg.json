@@ -18,9 +18,10 @@
 		"wP_kap": [ 0.0 ],
 		"wP_lam": [ 0.0 ],
 		"penalty_threshold": [ 0.01 ],
-		"betaP": [ 100 ],
-		"snap_before_P": [ false ],
+		"betaP": [ 256 ],
 		"stage_iter": [ 5 ],
-		"warmup_stages": [ 1 ]
+		"warmup_stages": [ 1 ],
+		"warmup_reg_decay": [ 1.0 ],
+		"morph_method": [ "mgda" ]
 	}
 }

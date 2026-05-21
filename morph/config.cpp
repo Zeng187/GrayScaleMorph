@@ -51,6 +51,7 @@ Config::Config(const std::string& filePath) {
     PathSetting.DesignDir     = p["DesignDir"][0];
     PathSetting.TargetDir     = p["TargetDir"][0];
     PathSetting.MorphDir      = p["MorphDir"][0];
+    PathSetting.MorphLogsDir  = p.value("MorphLogsDir", nlohmann::json::array({std::string("../../Resources/2_morphlogs/")}))[0].get<std::string>();
     PathSetting.ParamDir      = p["ParamDir"][0];
     PathSetting.CondDir       = p["CondDir"][0];
     PathSetting.ForwardDir    = p["ForwardDir"][0];
@@ -87,9 +88,12 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wP_lam             = rt["wP_lam"][0];
     RuntimeSetting.penalty_threshold  = rt["penalty_threshold"][0];
     RuntimeSetting.betaP              = rt["betaP"][0];
-    RuntimeSetting.snap_before_P      = rt.value("snap_before_P", nlohmann::json::array({false}))[0];
-    RuntimeSetting.stage_iter         = rt.value("stage_iter",    nlohmann::json::array({5}))[0];
-    RuntimeSetting.warmup_stages      = rt.value("warmup_stages", nlohmann::json::array({1}))[0];
+    RuntimeSetting.stage_iter         = rt.value("stage_iter",        nlohmann::json::array({5}))[0];
+    RuntimeSetting.warmup_stages      = rt.value("warmup_stages",     nlohmann::json::array({1}))[0];
+    RuntimeSetting.warmup_reg_decay   = rt.value("warmup_reg_decay",  nlohmann::json::array({1.0}))[0];
+    RuntimeSetting.morph_method       = rt.value("morph_method",      nlohmann::json::array({std::string("mgda")}))[0].get<std::string>();
+    RuntimeSetting.whole_mesh_mode    = rt.value("WholeMeshMode",     nlohmann::json::array({false}))[0];
+    RuntimeSetting.init_from_param    = rt.value("InitFromParam",     nlohmann::json::array({false}))[0];
 }
 
 std::string Config::materialJsonPath() const

@@ -156,3 +156,42 @@ TinyAD::ScalarFunction<1, double, Eigen::Index>
 MaterialPenaltyFunctionPerF(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                             const std::vector<double> &feasible_vals,
                             double beta);
+
+// 2D-joint feasibility penalty based on Efrati non-Euclidean plate
+// elastic-strain-energy distance.  For each face, compute
+//   d^2_j(lambda, kappa) = lambda_bar_j^2 * (E/(1-nu)) *
+//       [ (h/4) * (lambda^2 - lambda_bar_j^2)^2
+//       + (h^3/12) * (kappa - kappa_bar_j)^2 ]
+// where (lambda_bar_j, kappa_bar_j) is the j-th feasible material pair
+// (sourced from feasible_lamb[j] / feasible_kapp[j]).  The penalty per
+// face is (beta/nF) * min_j d^2_j; total penalty is summed over faces
+// and the TinyAD scalar function reports gradient/Hessian w.r.t. the
+// *active* variable (kappa when self_is_kappa, lambda otherwise);
+// the other variable enters as a per-face constant from other_const.
+//
+// other_const must have length == nF and is captured by value.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialPenaltyFunctionPerF_Efrati(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                   const std::vector<double> &cand_self,
+                                   const std::vector<double> &cand_other,
+                                   const std::vector<double> &other_const,
+                                   double E,
+                                   double nu,
+                                   double h,
+                                   double beta,
+                                   bool self_is_kappa);
+
+// 2D-joint feasibility penalty using a plain Euclidean distance² in
+// (lambda, kappa) space (no physical weighting):
+//   d²_j = (lambda - lambda_bar_j)² + (kappa - kappa_bar_j)²
+//   penalty per face = (beta/nF) * min_j d²_j
+// The TinyAD scalar function differentiates w.r.t. the active variable
+// (kappa when self_is_kappa, lambda otherwise); the other variable
+// enters as a per-face constant from other_const.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+MaterialPenaltyFunctionPerF_Joint2D(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                    const std::vector<double> &cand_self,
+                                    const std::vector<double> &cand_other,
+                                    const std::vector<double> &other_const,
+                                    double beta,
+                                    bool self_is_kappa);

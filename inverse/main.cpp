@@ -64,6 +64,26 @@ int main(int /*argc*/, char * /*argv*/[])
     std::filesystem::create_directories(morph_dir);
     std::filesystem::create_directories(design_dir);
 
+    // ---- Iter-log CSV (wide-format, mirrors S2_GrayScaleMorph) ------------
+    // Resources/2_morphlogs/<method>/<model>/iter_log.csv
+    // Schema:
+    //   stage,substage,iter,spn,dist,proj_dist,kappa_reg,lambda_reg,penalty_term
+    // - substage : WarmOptKap / WarmOptLam / WarmOptP   (warm-up half)
+    //              OptKap / OptLam / OptP               (MGDA half)
+    // - iter     : SGN inner Newton iter (>=0) or -1 for end-of-substage row
+    // - proj_dist: computed at the iter's x state (or final state on -1 rows)
+    // - kappa_reg, lambda_reg : both regs (only one is dynamic per substage,
+    //              the other is the constant offset carried from the outer
+    //              scope)
+    // - penalty_term : Phi value (0 for warm-up / OptP)
+    const std::string morphlogs_dir = config.PathSetting.MorphLogsDir
+                                    + config.RuntimeSetting.morph_method + "/"
+                                    + model + "/";
+    std::filesystem::create_directories(morphlogs_dir);
+    std::ofstream iter_log_ofs(morphlogs_dir + "iter_log.csv");
+    iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,kappa_reg,lambda_reg,penalty_term\n";
+    spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
+
     // -------- Load target V (already scaled by Param) --------
     Eigen::MatrixXd V;
     Eigen::MatrixXi F;
@@ -171,21 +191,44 @@ int main(int /*argc*/, char * /*argv*/[])
 
     spdlog::info("Step 4: Inverse Design (MGDA).");
 
-    // MGDA does NOT use wP / penalty_threshold (penalty is the second objective,
-    // not a weighted term).  wP_kap / wP_lam in cfg.json are read but ignored.
+    // MGDA does NOT use wP / penalty_threshold; wP_kap / wP_lam ignored.
     double betaP = config.RuntimeSetting.betaP;
+
+    // === Penalty variant A: 1D independent (current) ===
     auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
     auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
+
+    // === Penalty variant B: 2D Euclidean joint (alt; uncomment to switch) ===
+    // Rebuilt before each MGDA substage so it captures the current "other"
+    // variable as a per-face constant.
+    // auto eigen_to_std = [](const Eigen::VectorXd& v) {
+    //     return std::vector<double>(v.data(), v.data() + v.size());
+    // };
+    // auto build_penalty_kap = [&]() {
+    //     return MaterialPenaltyFunctionPerF_Joint2D(
+    //         geometry, ac.feasible_kapp, ac.feasible_lamb,
+    //         eigen_to_std(lambda_pf_s.toVector()),
+    //         betaP, /*self_is_kappa=*/true);
+    // };
+    // auto build_penalty_lam = [&]() {
+    //     return MaterialPenaltyFunctionPerF_Joint2D(
+    //         geometry, ac.feasible_lamb, ac.feasible_kapp,
+    //         eigen_to_std(kappa_pf_s.toVector()),
+    //         betaP, /*self_is_kappa=*/false);
+    // };
 
     const int stage_iter = config.RuntimeSetting.stage_iter;
     int k = 0;
 
     // MGDA also drops wM/wL stage decay: regulariser weights are stage-constant
     // and only meaningful inside F (their gradient enters d_F).
-    const double wM_kap = config.RuntimeSetting.wM_kap;
-    const double wM_lam = config.RuntimeSetting.wM_lam;
-    const double wL_kap = config.RuntimeSetting.wL_kap;
-    const double wL_lam = config.RuntimeSetting.wL_lam;
+    // Reg coefficients are mutable so the warmup loop can homotopy-decay them
+    // between stages (warmup_reg_decay).  MGDA main loop inherits whatever
+    // value they're left at after warmup and holds it constant.
+    double wM_kap = config.RuntimeSetting.wM_kap;
+    double wM_lam = config.RuntimeSetting.wM_lam;
+    double wL_kap = config.RuntimeSetting.wL_kap;
+    double wL_lam = config.RuntimeSetting.wL_lam;
 
     double distance = 0.0;
     double spn_energy = 0.0;
@@ -212,7 +255,11 @@ int main(int /*argc*/, char * /*argv*/[])
     // nearest feasible material pair, re-run forward Newton, and return the
     // mass-weighted distance from the resulting Vr_proj to the target.  This
     // is what the discretised material design will actually produce.
-    auto computeProjectedDistance = [&]() -> double
+    // Projected distance: snap current (kappa, lambda) per face to nearest
+    // feasible material pair, re-run forward Newton from Vr_start, return
+    // mass-weighted distance to target.  Pass a different initial mesh to
+    // evaluate the proj_dist at that state (e.g. SGN inner-iter intermediate).
+    auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) -> double
     {
         FaceData<double> kappa_pf_proj(mesh);
         FaceData<double> lambda_pf_proj(mesh);
@@ -225,7 +272,7 @@ int main(int /*argc*/, char * /*argv*/[])
         }
         auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
                                                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Eigen::MatrixXd Vr_proj = Vr;
+        Eigen::MatrixXd Vr_proj = Vr_start;
         newton(geometry, Vr_proj, simFunc_proj,
                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
         double d2 = 0.0;
@@ -236,6 +283,16 @@ int main(int /*argc*/, char * /*argv*/[])
                 d2 += masses(3 * i + j) * d * d;
             }
         return d2;
+    };
+    auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
+
+    // Reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
+    auto reshape_x_to_V = [&](const Eigen::VectorXd& x_vec) {
+        Eigen::MatrixXd V_iter(nV, 3);
+        for (size_t v = 0; v < nV; ++v)
+            for (int j = 0; j < 3; ++j)
+                V_iter(v, j) = x_vec(3 * v + j);
+        return V_iter;
     };
 
     // Re-run forward Newton on the current (P, lambda, kappa) state and
@@ -280,23 +337,55 @@ int main(int /*argc*/, char * /*argv*/[])
                   << "\n";
     };
 
+    // ---- Iter-log helpers (S2_GrayScaleMorph wide-format) ------------------
+    // Each row records the GLOBAL energy decomposition at the current
+    // (lambda, kappa) state — Reg_total = kappa_reg + lambda_reg and
+    // Phi_total = Phi(kappa) + Phi(lambda) — regardless of which variable
+    // the SGN substage is currently optimising.  Warmup substages produce
+    // identical-shape rows so the curves stay continuous across the
+    // warmup -> MGDA boundary.
+    auto computePhiTotal = [&]() {
+        // 1D independent total: sum of Phi(kappa) + Phi(lambda) on current
+        // per-face values.  Matches the penalty handed to MGDA.
+        return penalty_to_kapp.eval(kappa_pf_s.toVector())
+             + penalty_to_lamb.eval(lambda_pf_s.toVector());
+    };
+    auto writeSummaryRow = [&](int stage_idx, const std::string& substage) {
+        const double pd_v  = computeProjectedDistance();
+        const double kr_v  = computeKappaReg();
+        const double lr_v  = computeLambdaReg();
+        const double phi_v = computePhiTotal();
+        iter_log_ofs << stage_idx << "," << substage << ",-1,"
+                     << spn_energy << "," << distance << "," << pd_v << ","
+                     << kr_v << "," << lr_v << "," << phi_v << "\n";
+        iter_log_ofs.flush();
+    };
+    auto makeIterLogger = [&](int stage_idx, const std::string& substage) -> SgnIterCallback {
+        return [&, stage_idx, substage]
+               (int iter, const Eigen::VectorXd& x_iter,
+                double spn, double dist_v, double /*self_reg*/, double /*penalty*/) {
+            const double pd_v  = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            const double kr_v  = computeKappaReg();
+            const double lr_v  = computeLambdaReg();
+            const double phi_v = computePhiTotal();
+            iter_log_ofs << stage_idx << "," << substage << "," << iter << ","
+                         << spn << "," << dist_v << "," << pd_v << ","
+                         << kr_v << "," << lr_v << "," << phi_v << "\n";
+        };
+    };
+
     // ARAP P-update lambda (reused by warm-up and MGDA stages).
-    // Optionally snaps (lambda, kappa) to nearest feasible (t1, t2) pair
-    // before fitting P, so the parameterisation aligns with the actually-
-    // manufactured material assignment instead of the continuous SGN
-    // intermediate.  After P/MrInv refresh, runs forward Newton to pull
-    // Vr back to equilibrium and refreshes reg accumulators + spn_energy,
-    // then prints a unified stage stats line.
+    // After P/MrInv refresh, runs forward Newton to pull Vr back to
+    // equilibrium and refreshes reg accumulators + spn_energy, then prints
+    // a unified stage stats line.
     auto runArapPUpdate = [&](const std::string& tag) {
-        if (config.RuntimeSetting.snap_before_P) {
-            for (Face f : mesh.faces()) {
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
-                                            kappa_pf_s[f], lambda_pf_s[f]);
-                kappa_pf_s[f]  = ac.feasible_kapp[idx];
-                lambda_pf_s[f] = ac.feasible_lamb[idx];
-            }
-        }
         Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
+        // Clamp lambda to safe positive range so pathological values don't
+        // blow up sTarget = 1/lambda (see develop_homotopy 1cc9a7a).
+        for (int ii = 0; ii < lambdaVec.size(); ++ii) {
+            if (!std::isfinite(lambdaVec(ii)) || lambdaVec(ii) < 1e-3)
+                lambdaVec(ii) = 1e-3;
+        }
         Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
         Eigen::MatrixX2d P_2d = P;
         paramSolver.solve(P_2d, sTarget, sTarget, 10);
@@ -337,9 +426,12 @@ int main(int /*argc*/, char * /*argv*/[])
                  config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                  wM_kap, wL_kap,
                  E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                 distance, spn_energy, self_reg);
+                 distance, spn_energy, self_reg,
+                 [](const auto&){},
+                 makeIterLogger(kw, "WarmOptKap"));
         kappa_reg = self_reg;
         printStageStats();
+        writeSummaryRow(kw, "WarmOptKap");
 
         printf("---- Warmup OptLam (no penalty) ----\n");
         auto adjF_w_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
@@ -349,12 +441,27 @@ int main(int /*argc*/, char * /*argv*/[])
                  config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                  wM_lam, wL_lam,
                  E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                 distance, spn_energy, self_reg);
+                 distance, spn_energy, self_reg,
+                 [](const auto&){},
+                 makeIterLogger(kw, "WarmOptLam"));
         lambda_reg = self_reg;
         printStageStats();
+        writeSummaryRow(kw, "WarmOptLam");
 
         runArapPUpdate("warmup" + std::to_string(kw));
         // runArapPUpdate already refreshed kappa_reg / lambda_reg / spn_energy.
+        writeSummaryRow(kw, "WarmOptP");
+
+        // Homotopy-style decay of reg coefficients between warmup stages.
+        // Reg's role is just to keep early SGN well-posed; let it fade so
+        // distance dominates F by the end of warmup.
+        const double decay = config.RuntimeSetting.warmup_reg_decay;
+        wM_kap *= decay;  wL_kap *= decay;
+        wM_lam *= decay;  wL_lam *= decay;
+        // Recompute reg accumulators with the new weights so the next call
+        // sees the right offset.
+        kappa_reg  = computeKappaReg();
+        lambda_reg = computeLambdaReg();
     }
     printf("============================ Warmup done, entering MGDA ============================\n");
 
@@ -382,41 +489,57 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptKap Start (MGDA) ----------------------------\n", k);
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        // 1D penalty path: cand_other / other_const left default-empty so the
+        // SGN d_P uses 1D snap on `candidate_vals`.
+        // For 2D Joint variant: snapshot lambda_pf_s.toVector() and pass it
+        //   plus ac.feasible_lamb at the call's tail (see commented setup above).
         Vr = sparse_gauss_newton_FixLam_OptKap_MGDA(
                  geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
-                 adjointFunc_OptKap, penalty_to_kapp, ac.feasible_kapp, betaP, fixedIdx,
+                 adjointFunc_OptKap, penalty_to_kapp,
+                 ac.feasible_kapp, betaP, fixedIdx,
                  config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                  wM_kap, wL_kap,
                  E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                 distance, spn_energy, self_reg, penalty_kap_val, pareto_kap);
+                 distance, spn_energy, self_reg, penalty_kap_val, pareto_kap,
+                 [](const auto&){},
+                 makeIterLogger(k, "OptKap"));
         kappa_reg = self_reg;
         printStageStats();
+        writeSummaryRow(k, "OptKap");
         printf("----------------------------  OptKap Finish ----------------------------\n", k);
 
         printf("----------------------------  OptLam Start (MGDA) ----------------------------\n", k);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Vr = sparse_gauss_newton_FixKap_OptLam_MGDA(
                  geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
-                 adjointFunc_OptLam, penalty_to_lamb, ac.feasible_lamb, betaP, fixedIdx,
+                 adjointFunc_OptLam, penalty_to_lamb,
+                 ac.feasible_lamb, betaP, fixedIdx,
                  config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                  wM_lam, wL_lam,
                  E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-                 distance, spn_energy, self_reg, penalty_lam_val, pareto_lam);
+                 distance, spn_energy, self_reg, penalty_lam_val, pareto_lam,
+                 [](const auto&){},
+                 makeIterLogger(k, "OptLam"));
         lambda_reg = self_reg;
         printStageStats();
+        writeSummaryRow(k, "OptLam");
         printf("----------------------------  OptLam Finish ----------------------------\n", k);
 
         runArapPUpdate("stage" + std::to_string(k));
         // runArapPUpdate already refreshed kappa_reg / lambda_reg / spn_energy.
+        writeSummaryRow(k, "OptP");
 
-        // ---- Trust-region safeguard: accept / reject this stage -----------
+        // ---- Trust-region safeguard: best snapshot tracks historical min
+        //      proj_dist (decoupled from accept); reject (revert) only when
+        //      BOTH dist and proj worsen.  See develop_homotopy 0d42dfd. ----
         const double dist_new = distance;
         const double proj_new = computeProjectedDistance();
-        const bool   reject   = (dist_new > dist_best) && (proj_new > proj_best);
-        if (!reject)
+
+        const bool snapshot_improves = (proj_new < proj_best);
+        if (snapshot_improves)
         {
-            dist_best       = dist_new;
             proj_best       = proj_new;
+            dist_best       = dist_new;
             Vr_best         = Vr;
             lambda_pf_best  = lambda_pf_s;
             kappa_pf_best   = kappa_pf_s;
@@ -425,11 +548,10 @@ int main(int /*argc*/, char * /*argv*/[])
             M_kappa_best    = M_kappa;
             kappa_reg_best  = kappa_reg;
             lambda_reg_best = lambda_reg;
-            std::cout << "[ACCEPT] stage " << k
-                      << ": dist=" << dist_new << "  proj=" << proj_new
-                      << "  (best updated)\n";
         }
-        else
+
+        const bool reject = (dist_new > dist_best) && (proj_new > proj_best);
+        if (reject)
         {
             Vr          = Vr_best;
             lambda_pf_s = lambda_pf_best;
@@ -445,12 +567,35 @@ int main(int /*argc*/, char * /*argv*/[])
                       << " AND proj=" << proj_new << ">" << proj_best
                       << "; revert\n";
         }
+        else if (snapshot_improves)
+        {
+            std::cout << "[ACCEPT, best updated] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << " (best now)\n";
+        }
+        else
+        {
+            std::cout << "[ACCEPT, best unchanged] stage " << k
+                      << ": dist=" << dist_new << "  proj=" << proj_new
+                      << " (best proj still " << proj_best << ")\n";
+        }
         // -------------------------------------------------------------------
 
         k++;
 
         printf("----------------------------------------------------------------------------------------------------------------------\n");
     }
+
+    // Restore best snapshot explicitly so downstream material output and
+    // patch_0_proj.obj use the historical-minimum-proj_dist design.
+    Vr          = Vr_best;
+    lambda_pf_s = lambda_pf_best;
+    kappa_pf_s  = kappa_pf_best;
+    P           = P_best;
+    MrInv       = MrInv_best;
+    M_kappa     = M_kappa_best;
+    std::cout << "Restored best snapshot: dist=" << dist_best
+              << "  proj=" << proj_best << "\n";
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.

@@ -55,36 +55,69 @@ int main(int /*argc*/, char* /*argv*/[])
     const std::string pred_dir   = config.PathSetting.ForwardDir + model + "/";
     std::filesystem::create_directories(pred_dir);
 
-    // -------- Load V (physical-unit target, also used as Newton init) --------
-    Eigen::MatrixXd V;
-    Eigen::MatrixXi F;
-    const std::string v_path = target_dir + "patch_0_V.obj";
-    if (!igl::readOBJ(v_path, V, F)) {
-        spdlog::error("Cannot read V: {}.  Run Param first.", v_path);
-        return -1;
-    }
-    const Eigen::Index nV = V.rows();
-    const Eigen::Index nF = F.rows();
-    spdlog::info("V: {} V, {} F (from {}).", nV, nF, v_path);
+    // File-name prefix selector. Legacy EvolutionCut pipeline uses patch_0_*;
+    // ShapeGen synthetic-shape pipeline uses {model}_* to keep one name per
+    // shape end-to-end (mesh, BC, design, pred all share the same model name).
+    const bool whole_mesh = config.RuntimeSetting.whole_mesh_mode;
+    const std::string p_name   = whole_mesh ? (model + "_param")        : "patch_0_P";
+    const std::string c_name   = whole_mesh ? (model + "_bound_center") : "patch_0_bound_center";
+    const std::string v_name   = whole_mesh ? (model + "_V")            : "patch_0_V";
 
-    // -------- Load P --------
+    // -------- Load P (2D parameterization, always required) --------
     Eigen::MatrixXd P_loaded3;
     Eigen::MatrixXi F_p;
-    const std::string p_path = param_dir + "patch_0_P.obj";
+    const std::string p_path = param_dir + p_name + ".obj";
     if (!igl::readOBJ(p_path, P_loaded3, F_p)) {
         spdlog::error("Cannot read P: {}.  Run Param first.", p_path);
         return -1;
     }
-    if (P_loaded3.rows() != nV) {
-        spdlog::error("P vertex count ({}) does not match V count ({}).", P_loaded3.rows(), nV);
-        return -1;
-    }
+    const Eigen::Index nV = P_loaded3.rows();
+    const Eigen::Index nF = F_p.rows();
+    spdlog::info("P: {} V, {} F (from {}).", nV, nF, p_path);
     Eigen::MatrixXd P = P_loaded3.leftCols(2);
+
+    // -------- Load or synthesize V (Newton init) --------
+    // Default behavior (init_from_param=false): read the target 3D mesh
+    // from target_dir, both as the Newton init AND as the reference deformed
+    // geometry the design was solved against -- this is the standard
+    // EvolutionCut → Inverse → Forward path.
+    //
+    // Forward-only behavior (init_from_param=true): we have no target;
+    // initialize V = [P, eps*N(0,1)] so Newton starts at a near-flat plate
+    // with a tiny z perturbation to break the planar-saddle degeneracy.
+    // The strain-driven gradient at the flat state then pushes V away from
+    // z=0 toward the curved minimum determined by the design.
+    Eigen::MatrixXd V;
+    Eigen::MatrixXi F = F_p;
+    if (config.RuntimeSetting.init_from_param) {
+        constexpr double kInitZNoise = 1e-3;
+        V = Eigen::MatrixXd::Zero(nV, 3);
+        V.leftCols(2) = P;
+        std::srand(0);
+        for (Eigen::Index i = 0; i < nV; ++i) {
+            V(i, 2) = kInitZNoise * ((std::rand() / double(RAND_MAX)) * 2.0 - 1.0);
+        }
+        spdlog::info("V: {} V, {} F (synthesized from P + N(0,{:.0e}) z noise, init_from_param=true).",
+                     nV, nF, kInitZNoise);
+    } else {
+        const std::string v_path = target_dir + v_name + ".obj";
+        Eigen::MatrixXi F_v;
+        if (!igl::readOBJ(v_path, V, F_v)) {
+            spdlog::error("Cannot read V: {}.  Run Param first or set RuntimeSettings.InitFromParam=true.", v_path);
+            return -1;
+        }
+        if (V.rows() != nV) {
+            spdlog::error("V vertex count ({}) does not match P count ({}).", V.rows(), nV);
+            return -1;
+        }
+        F = F_v;
+        spdlog::info("V: {} V, {} F (target loaded from {}).", nV, nF, v_path);
+    }
 
     // -------- Load cond (3 vertex idx -> 9 DOF) --------
     std::vector<int> fixedVertexIdx;
     {
-        const std::string cond_path = cond_dir + "patch_0_bound_center.txt";
+        const std::string cond_path = cond_dir + c_name + ".txt";
         std::ifstream ifs(cond_path);
         if (!ifs.is_open()) {
             spdlog::error("Cannot read cond: {}.  Run Param first.", cond_path);
