@@ -355,10 +355,11 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
         kappa_reg = self_reg; // sync for the next OptLam call
+        const double dist_after_kap = distance;
+        const double proj_after_kap = computeProjectedDistance();
         {
-            const double pd = computeProjectedDistance();
             const double pen_end = wP_kap * penalty_to_kapp.eval(kappa_pf_s.toVector());
-            iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << pd << ","
+            iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
                          << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
         }
 
@@ -384,10 +385,11 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);
         lambda_reg = self_reg; // sync for the next OptKap call
+        const double dist_after_lam = distance;
+        const double proj_after_lam = computeProjectedDistance();
         {
-            const double pd = computeProjectedDistance();
             const double pen_end = wP_lam * penalty_to_lamb.eval(lambda_pf_s.toVector());
-            iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << pd << ","
+            iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
                          << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
         }
 
@@ -492,6 +494,36 @@ int main(int /*argc*/, char * /*argv*/[])
             lambda_reg_best = lambda_reg;
         }
 
+        // Per-direction marginal evaluation:
+        //   OptKap "failed" iff its end-of-substage (dist, proj) both worsen
+        //     relative to the stage-entry best snapshot -> shrink wP kap growth.
+        //   OptLam "failed" iff its end-of-substage (dist, proj) both worsen
+        //     relative to where OptKap left off -> shrink wP lam growth.
+        // Each direction is judged on its own marginal contribution, so a bad
+        // OptKap step does not penalise wP_growth_factor_lam and vice versa.
+        const bool kap_failed = (dist_after_kap > dist_best) && (proj_after_kap > proj_best);
+        const bool lam_failed = (dist_after_lam > dist_after_kap) && (proj_after_lam > proj_after_kap);
+        if (kap_failed)
+        {
+            wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
+            std::cout << "  [shrink kap] OptKap pushed dist/proj above best (dist "
+                      << dist_after_kap << ">" << dist_best
+                      << ", proj " << proj_after_kap << ">" << proj_best
+                      << ") -> wP_growth_factor_kap=" << wP_growth_factor_kap << "\n";
+        }
+        if (lam_failed)
+        {
+            wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
+            std::cout << "  [shrink lam] OptLam worsened dist/proj over OptKap-end (dist "
+                      << dist_after_lam << ">" << dist_after_kap
+                      << ", proj " << proj_after_lam << ">" << proj_after_kap
+                      << ") -> wP_growth_factor_lam=" << wP_growth_factor_lam << "\n";
+        }
+
+        // Stage-level reject still uses the user-defined "both worsen" rule.
+        // On reject we revert the *state* to the best snapshot but do NOT
+        // collectively halve the growth factors (substage-level shrinks above
+        // have already targeted only the offending side).
         const bool reject = (dist_new > dist_best) && (proj_new > proj_best);
         if (reject)
         {
@@ -506,13 +538,10 @@ int main(int /*argc*/, char * /*argv*/[])
             wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
-            wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
-            wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
             std::cout << "[REJECT] stage " << k
                       << ": dist=" << dist_new << ">" << dist_best
                       << " AND proj=" << proj_new << ">" << proj_best
-                      << "; revert, wP_growth_factor_kap -> " << wP_growth_factor_kap
-                      << ", wP_growth_factor_lam -> " << wP_growth_factor_lam << "\n";
+                      << "; revert state to best snapshot\n";
         }
         else if (snapshot_improves)
         {
