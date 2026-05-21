@@ -319,14 +319,15 @@ int main(int /*argc*/, char * /*argv*/[])
         return V_iter;
     };
 
-    // Dynamic wP growth, expressed as a multiplicative *increment* factor:
-    //   wP_new = wP * (1 + wP_growth_factor)
-    // Initial value read from cfg.json (RuntimeSettings.wP_growth_factor,
-    // default 1.0 -> wP doubles per stage).  Halved every time a stage is
-    // REJECTed; factor -> 0 naturally damps the homotopy to "no growth"
-    // (wP * 1).  Floored at 1e-4 so a future ACCEPT can still gently
-    // tighten wP.
-    double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
+    // Dynamic wP growth, per-direction increment factors:
+    //   wP_kap_new = wP_kap * (1 + wP_growth_factor_kap)
+    //   wP_lam_new = wP_lam * (1 + wP_growth_factor_lam)
+    // Each direction has its own factor so OptKap / OptLam can anneal
+    // independently.  Halved on a REJECT (both directions halved at the
+    // same time today; substage-level analysis could later target only
+    // the offending side).  Floored at 1e-4.
+    double wP_growth_factor_kap = config.RuntimeSetting.wP_growth_factor_kap;
+    double wP_growth_factor_lam = config.RuntimeSetting.wP_growth_factor_lam;
 
     while (k < stage_iter)
     {
@@ -505,12 +506,13 @@ int main(int /*argc*/, char * /*argv*/[])
             wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
-            wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
+            wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
+            wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
             std::cout << "[REJECT] stage " << k
                       << ": dist=" << dist_new << ">" << dist_best
                       << " AND proj=" << proj_new << ">" << proj_best
-                      << "; revert, wP_growth_factor -> " << wP_growth_factor
-                      << " (next wP *= " << (1.0 + wP_growth_factor) << ")\n";
+                      << "; revert, wP_growth_factor_kap -> " << wP_growth_factor_kap
+                      << ", wP_growth_factor_lam -> " << wP_growth_factor_lam << "\n";
         }
         else if (snapshot_improves)
         {
@@ -527,11 +529,10 @@ int main(int /*argc*/, char * /*argv*/[])
         // -------------------------------------------------------------------
 
         k++;
-        const double wP_step = 1.0 + wP_growth_factor;
         if (penalty_kap >= penalty_threshold)
-            wP_kap *= wP_step;
+            wP_kap *= (1.0 + wP_growth_factor_kap);
         if (penalty_lam >= penalty_threshold)
-            wP_lam *= wP_step;
+            wP_lam *= (1.0 + wP_growth_factor_lam);
 
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;

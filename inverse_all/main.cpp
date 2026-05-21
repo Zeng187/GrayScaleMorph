@@ -301,7 +301,8 @@ int main(int argc, char* argv[])
         double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
         double kappa_reg_best  = kappa_reg;
         double lambda_reg_best = lambda_reg;
-        double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
+        double wP_growth_factor_kap = config.RuntimeSetting.wP_growth_factor_kap;
+        double wP_growth_factor_lam = config.RuntimeSetting.wP_growth_factor_lam;
 
         // Per-patch CSV log: written under MorphLogsDir/{method}/{model}/.
         // Schema: stage,substage,iter,spn,dist.
@@ -321,7 +322,9 @@ int main(int argc, char* argv[])
 
             // -- OptKap --
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            auto logger_OptKap = [&iter_log_ofs, k](int i, double spn, double dist) {
+            auto logger_OptKap = [&iter_log_ofs, k](int i, const Eigen::VectorXd&,
+                                                     double spn, double dist,
+                                                     double /*self_reg*/, double /*pen*/) {
                 iter_log_ofs << k << ",OptKap," << i << "," << spn << "," << dist << "\n";
             };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
@@ -339,7 +342,9 @@ int main(int argc, char* argv[])
 
             // -- OptLam --
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            auto logger_OptLam = [&iter_log_ofs, k](int i, double spn, double dist) {
+            auto logger_OptLam = [&iter_log_ofs, k](int i, const Eigen::VectorXd&,
+                                                     double spn, double dist,
+                                                     double /*self_reg*/, double /*pen*/) {
                 iter_log_ofs << k << ",OptLam," << i << "," << spn << "," << dist << "\n";
             };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
@@ -440,9 +445,11 @@ int main(int argc, char* argv[])
                 wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
                 kappa_reg   = kappa_reg_best;
                 lambda_reg  = lambda_reg_best;
-                wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
-                spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor -> {:.6f}",
-                             pd.idx, k, dist_new, dist_best, proj_new, proj_best, wP_growth_factor);
+                wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
+                wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
+                spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor_kap -> {:.6f}, _lam -> {:.6f}",
+                             pd.idx, k, dist_new, dist_best, proj_new, proj_best,
+                             wP_growth_factor_kap, wP_growth_factor_lam);
             } else if (snapshot_improves) {
                 spdlog::info("Patch {} Stage {} [ACCEPT, best updated] dist={:.6f} proj={:.6f} (best now)",
                              pd.idx, k, dist_new, proj_new);
@@ -452,9 +459,8 @@ int main(int argc, char* argv[])
             }
 
             k++;
-            const double wP_step = 1.0 + wP_growth_factor;
-            if (penalty_kap >= penalty_threshold) wP_kap *= wP_step;
-            if (penalty_lam >= penalty_threshold) wP_lam *= wP_step;
+            if (penalty_kap >= penalty_threshold) wP_kap *= (1.0 + wP_growth_factor_kap);
+            if (penalty_lam >= penalty_threshold) wP_lam *= (1.0 + wP_growth_factor_lam);
 
             wM_kap *= 0.5;  wL_kap *= 0.5;
             wM_lam *= 0.5;  wL_lam *= 0.5;

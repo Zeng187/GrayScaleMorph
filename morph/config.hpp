@@ -69,9 +69,10 @@ public:
         double penalty_threshold;
         double betaP;
         bool   snap_before_P;       // hard-snap (lambda, kappa) to nearest feasible before each P-update
-        int    stage_iter;          // outer alternating-stage count
-        double wP_growth_factor;    // initial value of (1 + factor) homotopy step; halved on REJECT
-        std::string morph_method;   // subdir name under MorphLogsDir; e.g. "homotopy", "mgda"
+        int    stage_iter;              // outer alternating-stage count
+        double wP_growth_factor_kap;    // initial (1+factor) homotopy step for wP_kap; halved on REJECT
+        double wP_growth_factor_lam;    // initial (1+factor) homotopy step for wP_lam; halved on REJECT
+        std::string morph_method;       // subdir name under MorphLogsDir; e.g. "homotopy", "mgda"
     } RuntimeSetting;
 
     // --------- Convenience: full material .json path ---------

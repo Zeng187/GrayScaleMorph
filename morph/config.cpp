@@ -90,7 +90,15 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];
     RuntimeSetting.stage_iter         = rt.value("stage_iter",       nlohmann::json::array({5}))[0];
-    RuntimeSetting.wP_growth_factor   = rt.value("wP_growth_factor", nlohmann::json::array({1.0}))[0];
+    {
+        // Per-direction wP growth factors.  Fall back to the legacy single
+        // `wP_growth_factor` if the per-direction keys are absent.
+        const double default_growth = rt.value("wP_growth_factor", nlohmann::json::array({1.0}))[0];
+        RuntimeSetting.wP_growth_factor_kap = rt.value("wP_growth_factor_kap",
+            nlohmann::json::array({default_growth}))[0];
+        RuntimeSetting.wP_growth_factor_lam = rt.value("wP_growth_factor_lam",
+            nlohmann::json::array({default_growth}))[0];
+    }
     RuntimeSetting.morph_method       = rt.value("morph_method",     nlohmann::json::array({std::string("homotopy")}))[0].get<std::string>();
 }
 
