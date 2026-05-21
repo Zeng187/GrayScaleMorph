@@ -207,10 +207,11 @@ int main(int /*argc*/, char * /*argv*/[])
     double self_reg = 0.0;
 
     // Projected distance: snap the current (kappa, lambda) on every face to the
-    // nearest feasible material pair, re-run forward Newton, and return the
-    // mass-weighted distance from the resulting Vr_proj to the target.  This
-    // is what the discretised material design will actually produce.
-    auto computeProjectedDistance = [&]() -> double
+    // nearest feasible material pair, re-run forward Newton from `Vr_start`,
+    // return the mass-weighted distance to target.  Vr_start defaults to the
+    // current `Vr`; pass a different initial mesh (e.g. SGN iter intermediate)
+    // to evaluate the proj_dist at that state.
+    auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) -> double
     {
         FaceData<double> kappa_pf_proj(mesh);
         FaceData<double> lambda_pf_proj(mesh);
@@ -223,7 +224,7 @@ int main(int /*argc*/, char * /*argv*/[])
         }
         auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
                                                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        Eigen::MatrixXd Vr_proj = Vr;
+        Eigen::MatrixXd Vr_proj = Vr_start;
         newton(geometry, Vr_proj, simFunc_proj,
                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
         double d2 = 0.0;
@@ -235,6 +236,7 @@ int main(int /*argc*/, char * /*argv*/[])
             }
         return d2;
     };
+    auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
 
     // Re-run forward Newton on the current (P, lambda, kappa) state and
     // recompute mass-weighted distance.  Updates `Vr` in place so the next
@@ -305,8 +307,17 @@ int main(int /*argc*/, char * /*argv*/[])
                                     + model + "/";
     std::filesystem::create_directories(morphlogs_dir);
     std::ofstream iter_log_ofs(morphlogs_dir + "iter_log.csv");
-    iter_log_ofs << "stage,substage,iter,spn,dist\n";
+    iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,kappa_reg,lambda_reg,penalty_term\n";
     spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
+
+    // Helper to reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
+    auto reshape_x_to_V = [&](const Eigen::VectorXd& x_vec) {
+        Eigen::MatrixXd V_iter(nV, 3);
+        for (size_t v = 0; v < nV; ++v)
+            for (int j = 0; j < 3; ++j)
+                V_iter(v, j) = x_vec(3 * v + j);
+        return V_iter;
+    };
 
     // Dynamic wP growth, expressed as a multiplicative *increment* factor:
     //   wP_new = wP * (1 + wP_growth_factor)
@@ -327,8 +338,14 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptKap Start ----------------------------\n", k);
 
         auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        auto logger_OptKap = [&iter_log_ofs, k](int i, double spn, double dist) {
-            iter_log_ofs << k << ",OptKap," << i << "," << spn << "," << dist << "\n";
+        // OptKap: self_reg = kappa_reg (dynamic), lambda_reg is the constant other_reg.
+        auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
+                                 double spn, double dist, double self_reg_iter, double penalty_iter) {
+            const double pd = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            iter_log_ofs << k << ",OptKap," << i << ","
+                         << spn << "," << dist << "," << pd << ","
+                         << self_reg_iter << "," << lambda_reg << ","
+                         << penalty_iter << "\n";
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
@@ -337,7 +354,12 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
         kappa_reg = self_reg; // sync for the next OptLam call
-        iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "\n";
+        {
+            const double pd = computeProjectedDistance();
+            const double pen_end = wP_kap * penalty_to_kapp.eval(kappa_pf_s.toVector());
+            iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << pd << ","
+                         << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
+        }
 
         printStageStats();
 
@@ -345,8 +367,14 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptLam Start ----------------------------\n", k);
         auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-        auto logger_OptLam = [&iter_log_ofs, k](int i, double spn, double dist) {
-            iter_log_ofs << k << ",OptLam," << i << "," << spn << "," << dist << "\n";
+        // OptLam: self_reg = lambda_reg (dynamic), kappa_reg is the constant other_reg.
+        auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
+                                 double spn, double dist, double self_reg_iter, double penalty_iter) {
+            const double pd = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            iter_log_ofs << k << ",OptLam," << i << ","
+                         << spn << "," << dist << "," << pd << ","
+                         << kappa_reg << "," << self_reg_iter << ","
+                         << penalty_iter << "\n";
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
@@ -355,7 +383,12 @@ int main(int /*argc*/, char * /*argv*/[])
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);
         lambda_reg = self_reg; // sync for the next OptKap call
-        iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "\n";
+        {
+            const double pd = computeProjectedDistance();
+            const double pen_end = wP_lam * penalty_to_lamb.eval(lambda_pf_s.toVector());
+            iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << pd << ","
+                         << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
+        }
 
         printStageStats();
 
@@ -422,7 +455,10 @@ int main(int /*argc*/, char * /*argv*/[])
                       << ": lambda range [" << lambdaVec.minCoeff()
                       << ", " << lambdaVec.maxCoeff() << "]  ";
             printStageStats();
-            iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "\n";
+            // OptP final: no penalty term applies (P-update changes geometry, not theta).
+            const double pd_optp = computeProjectedDistance();
+            iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_optp << ","
+                         << kappa_reg << "," << lambda_reg << ",0\n";
         }
         // -------------------------------------------------------------------
 

@@ -54,7 +54,8 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(int, double, double)>& iter_logger = [](int,double,double){},
+const std::function<void(int, const Eigen::VectorXd&, double, double, double, double)>& iter_logger
+    = [](int, const Eigen::VectorXd&, double, double, double, double){},
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -82,7 +83,8 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(int, double, double)>& iter_logger = [](int,double,double){},
+const std::function<void(int, const Eigen::VectorXd&, double, double, double, double)>& iter_logger
+    = [](int, const Eigen::VectorXd&, double, double, double, double){},
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -112,7 +114,8 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(int, double, double)>& iter_logger = [](int,double,double){},
+const std::function<void(int, const Eigen::VectorXd&, double, double, double, double)>& iter_logger
+    = [](int, const Eigen::VectorXd&, double, double, double, double){},
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
 
 
@@ -142,5 +145,6 @@ const std::vector<int>& ref_faces,
 double& final_distance,
 double& final_spn_energy,
 double& final_self_reg,
-const std::function<void(int, double, double)>& iter_logger = [](int,double,double){},
+const std::function<void(int, const Eigen::VectorXd&, double, double, double, double)>& iter_logger
+    = [](int, const Eigen::VectorXd&, double, double, double, double){},
 const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});
