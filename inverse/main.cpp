@@ -170,8 +170,7 @@ int main(int /*argc*/, char * /*argv*/[])
 
     spdlog::info("Step 4: Inverse Design.");
 
-    double wP_kap = config.RuntimeSetting.wP_kap;
-    double wP_lam = config.RuntimeSetting.wP_lam;
+    double wP = config.RuntimeSetting.wP;
     double penalty_threshold = config.RuntimeSetting.penalty_threshold;
     double betaP = config.RuntimeSetting.betaP;
     // 2D joint hard-min penalty in the Efrati non-Euclidean plate energy
@@ -301,7 +300,7 @@ int main(int /*argc*/, char * /*argv*/[])
     Eigen::SparseMatrix<double>     M_kappa_best = M_kappa;
     double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
     double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
-    double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
+    double wP_best = wP;
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
 
     // CSV trajectory log of every SGN iter's (spn, dist) plus end-of-substage
@@ -327,21 +326,16 @@ int main(int /*argc*/, char * /*argv*/[])
         return V_iter;
     };
 
-    // Dynamic wP growth, per-direction increment factors:
-    //   wP_kap_new = wP_kap * (1 + wP_growth_factor_kap)
-    //   wP_lam_new = wP_lam * (1 + wP_growth_factor_lam)
-    // Each direction has its own factor so OptKap / OptLam can anneal
-    // independently.  Halved on a REJECT (both directions halved at the
-    // same time today; substage-level analysis could later target only
-    // the offending side).  Floored at 1e-4.
-    double wP_growth_factor_kap = config.RuntimeSetting.wP_growth_factor_kap;
-    double wP_growth_factor_lam = config.RuntimeSetting.wP_growth_factor_lam;
+    // Single homotopy growth factor for the unified wP (joint 2D penalty
+    // means one penalty function -> one wP).  wP_new = wP * (1 + factor).
+    // Halved on a REJECT, floored at 1e-4.
+    double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
 
     while (k < stage_iter)
     {
 
         printf("------------------------------------------------------ Stage: %d ------------------------------------------------------\n", k);
-        std::cout << "Parameters Settings (Penalty):  wP_kap = " << wP_kap << ", wP_lam = " << wP_lam << "\n";
+        std::cout << "Parameters Settings (Penalty):  wP = " << wP << "\n";
         std::cout << "Parameters Settings (Regular):  wM_kap = " << wM_kap << ", wL_kap = " << wL_kap << ", wM_lam = " << wM_lam << ", wL_lam = " << wL_lam << "\n";
 
         printf("----------------------------  OptKap Start ----------------------------\n", k);
@@ -358,7 +352,7 @@ int main(int /*argc*/, char * /*argv*/[])
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
@@ -366,7 +360,7 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_kap = distance;
         const double proj_after_kap = computeProjectedDistance();
         {
-            const double pen_end = wP_kap * penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_end = wP * penalty_to_kapp.eval(kappa_pf_s.toVector());
             iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
                          << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
         }
@@ -388,7 +382,7 @@ int main(int /*argc*/, char * /*argv*/[])
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);
@@ -396,7 +390,7 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_lam = distance;
         const double proj_after_lam = computeProjectedDistance();
         {
-            const double pen_end = wP_lam * penalty_to_lamb.eval(lambda_pf_s.toVector());
+            const double pen_end = wP * penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
                          << kappa_reg << "," << lambda_reg << "," << pen_end << "\n";
         }
@@ -497,41 +491,14 @@ int main(int /*argc*/, char * /*argv*/[])
             M_kappa_best    = M_kappa;
             wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
             wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
-            wP_kap_best     = wP_kap;   wP_lam_best = wP_lam;
+            wP_best         = wP;
             kappa_reg_best  = kappa_reg;
             lambda_reg_best = lambda_reg;
         }
 
-        // Per-direction marginal evaluation:
-        //   OptKap "failed" iff its end-of-substage (dist, proj) both worsen
-        //     relative to the stage-entry best snapshot -> shrink wP kap growth.
-        //   OptLam "failed" iff its end-of-substage (dist, proj) both worsen
-        //     relative to where OptKap left off -> shrink wP lam growth.
-        // Each direction is judged on its own marginal contribution, so a bad
-        // OptKap step does not penalise wP_growth_factor_lam and vice versa.
-        const bool kap_failed = (dist_after_kap > dist_best) && (proj_after_kap > proj_best);
-        const bool lam_failed = (dist_after_lam > dist_after_kap) && (proj_after_lam > proj_after_kap);
-        if (kap_failed)
-        {
-            wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
-            std::cout << "  [shrink kap] OptKap pushed dist/proj above best (dist "
-                      << dist_after_kap << ">" << dist_best
-                      << ", proj " << proj_after_kap << ">" << proj_best
-                      << ") -> wP_growth_factor_kap=" << wP_growth_factor_kap << "\n";
-        }
-        if (lam_failed)
-        {
-            wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
-            std::cout << "  [shrink lam] OptLam worsened dist/proj over OptKap-end (dist "
-                      << dist_after_lam << ">" << dist_after_kap
-                      << ", proj " << proj_after_lam << ">" << proj_after_kap
-                      << ") -> wP_growth_factor_lam=" << wP_growth_factor_lam << "\n";
-        }
-
-        // Stage-level reject still uses the user-defined "both worsen" rule.
-        // On reject we revert the *state* to the best snapshot but do NOT
-        // collectively halve the growth factors (substage-level shrinks above
-        // have already targeted only the offending side).
+        // Stage-level reject: both dist and proj worsened relative to the
+        // current best snapshot.  Revert all state and halve the single wP
+        // growth factor for the next attempt.
         const bool reject = (dist_new > dist_best) && (proj_new > proj_best);
         if (reject)
         {
@@ -543,13 +510,14 @@ int main(int /*argc*/, char * /*argv*/[])
             M_kappa     = M_kappa_best;
             wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
             wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
-            wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
+            wP          = wP_best;
             kappa_reg   = kappa_reg_best;
             lambda_reg  = lambda_reg_best;
+            wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
             std::cout << "[REJECT] stage " << k
                       << ": dist=" << dist_new << ">" << dist_best
                       << " AND proj=" << proj_new << ">" << proj_best
-                      << "; revert state to best snapshot\n";
+                      << "; revert state, wP_growth_factor -> " << wP_growth_factor << "\n";
         }
         else if (snapshot_improves)
         {
@@ -566,10 +534,8 @@ int main(int /*argc*/, char * /*argv*/[])
         // -------------------------------------------------------------------
 
         k++;
-        if (penalty_kap >= penalty_threshold)
-            wP_kap *= (1.0 + wP_growth_factor_kap);
-        if (penalty_lam >= penalty_threshold)
-            wP_lam *= (1.0 + wP_growth_factor_lam);
+        if (penalty_kap >= penalty_threshold || penalty_lam >= penalty_threshold)
+            wP *= (1.0 + wP_growth_factor);
 
         // if (penalty_kap < penalty_threshold && penalty_lam < penalty_threshold)
         //     break;

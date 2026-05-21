@@ -64,15 +64,13 @@ public:
         double wL_lam;
         double w_s;
         double w_b;
-        double wP_kap;
-        double wP_lam;
+        double wP;                      // single penalty weight (joint 2D penalty -> one wP)
         double penalty_threshold;
         double betaP;
-        bool   snap_before_P;       // hard-snap (lambda, kappa) to nearest feasible before each P-update
+        bool   snap_before_P;           // hard-snap (lambda, kappa) to nearest feasible before each P-update
         int    stage_iter;              // outer alternating-stage count
-        double wP_growth_factor_kap;    // initial (1+factor) homotopy step for wP_kap; halved on REJECT
-        double wP_growth_factor_lam;    // initial (1+factor) homotopy step for wP_lam; halved on REJECT
-        double joint_penalty_alpha;     // lambda-vs-kappa weight in the 2D joint penalty distance
+        double wP_growth_factor;        // initial (1+factor) homotopy step for wP; halved on REJECT
+        double joint_penalty_alpha;     // legacy field, unused in elastic-energy joint penalty (kept for cfg back-compat)
         std::string morph_method;       // subdir name under MorphLogsDir; e.g. "homotopy", "mgda"
     } RuntimeSetting;
 

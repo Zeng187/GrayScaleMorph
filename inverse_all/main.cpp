@@ -211,8 +211,7 @@ int main(int argc, char* argv[])
 
         spdlog::info("Step 4: Inverse Design.");
 
-        double wP_kap = config.RuntimeSetting.wP_kap;
-        double wP_lam = config.RuntimeSetting.wP_lam;
+        double wP = config.RuntimeSetting.wP;
         double penalty_threshold = config.RuntimeSetting.penalty_threshold;
         double betaP = config.RuntimeSetting.betaP;
         // 2D joint hard-min penalty in Efrati strain-energy metric (see
@@ -302,11 +301,10 @@ int main(int argc, char* argv[])
         Eigen::SparseMatrix<double> M_kappa_best   = M_kappa;
         double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
         double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
-        double wP_kap_best = wP_kap, wP_lam_best = wP_lam;
+        double wP_best = wP;
         double kappa_reg_best  = kappa_reg;
         double lambda_reg_best = lambda_reg;
-        double wP_growth_factor_kap = config.RuntimeSetting.wP_growth_factor_kap;
-        double wP_growth_factor_lam = config.RuntimeSetting.wP_growth_factor_lam;
+        double wP_growth_factor = config.RuntimeSetting.wP_growth_factor;
 
         // Per-patch CSV log: written under MorphLogsDir/{method}/{model}/.
         // Schema: stage,substage,iter,spn,dist.
@@ -321,8 +319,8 @@ int main(int argc, char* argv[])
 
         while (k < stage_iter)
         {
-            spdlog::info("Patch {} Stage {}: wP_kap={:.6f}, wP_lam={:.6f}, wM_kap={:.6f}, wL_kap={:.6f}, wM_lam={:.6f}, wL_lam={:.6f}",
-                         pd.idx, k, wP_kap, wP_lam, wM_kap, wL_kap, wM_lam, wL_lam);
+            spdlog::info("Patch {} Stage {}: wP={:.6f}, wM_kap={:.6f}, wL_kap={:.6f}, wM_lam={:.6f}, wL_lam={:.6f}",
+                         pd.idx, k, wP, wM_kap, wL_kap, wM_lam, wL_lam);
 
             // -- OptKap --
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
@@ -333,7 +331,7 @@ int main(int argc, char* argv[])
             };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg,
                 logger_OptKap);
@@ -353,7 +351,7 @@ int main(int argc, char* argv[])
             };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg,
                 logger_OptLam);
@@ -431,7 +429,7 @@ int main(int argc, char* argv[])
                 M_kappa_best    = M_kappa;
                 wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
                 wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
-                wP_kap_best     = wP_kap;   wP_lam_best = wP_lam;
+                wP_best         = wP;
                 kappa_reg_best  = kappa_reg;
                 lambda_reg_best = lambda_reg;
             }
@@ -446,14 +444,13 @@ int main(int argc, char* argv[])
                 M_kappa     = M_kappa_best;
                 wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
                 wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
-                wP_kap      = wP_kap_best;  wP_lam = wP_lam_best;
+                wP          = wP_best;
                 kappa_reg   = kappa_reg_best;
                 lambda_reg  = lambda_reg_best;
-                wP_growth_factor_kap = std::max(1e-4, wP_growth_factor_kap * 0.5);
-                wP_growth_factor_lam = std::max(1e-4, wP_growth_factor_lam * 0.5);
-                spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor_kap -> {:.6f}, _lam -> {:.6f}",
+                wP_growth_factor = std::max(1e-4, wP_growth_factor * 0.5);
+                spdlog::info("Patch {} Stage {} [REJECT] dist={:.6f}>{:.6f} AND proj={:.6f}>{:.6f}; revert, wP_growth_factor -> {:.6f}",
                              pd.idx, k, dist_new, dist_best, proj_new, proj_best,
-                             wP_growth_factor_kap, wP_growth_factor_lam);
+                             wP_growth_factor);
             } else if (snapshot_improves) {
                 spdlog::info("Patch {} Stage {} [ACCEPT, best updated] dist={:.6f} proj={:.6f} (best now)",
                              pd.idx, k, dist_new, proj_new);
@@ -463,8 +460,8 @@ int main(int argc, char* argv[])
             }
 
             k++;
-            if (penalty_kap >= penalty_threshold) wP_kap *= (1.0 + wP_growth_factor_kap);
-            if (penalty_lam >= penalty_threshold) wP_lam *= (1.0 + wP_growth_factor_lam);
+            if (penalty_kap >= penalty_threshold || penalty_lam >= penalty_threshold)
+                wP *= (1.0 + wP_growth_factor);
 
             wM_kap *= 0.5;  wL_kap *= 0.5;
             wM_lam *= 0.5;  wL_lam *= 0.5;
