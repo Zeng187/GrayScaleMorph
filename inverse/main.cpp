@@ -340,15 +340,19 @@ int main(int /*argc*/, char * /*argv*/[])
         return d2;
     };
 
-    // One-line stage stats: SPN energy -> Distance -> Projected distance -> Penalties.
+    // One-line stage stats: SPN energy -> Distance -> Projected distance ->
+    // boundary / interior per-vertex RMS -> Penalties.
     auto printStageStats = [&]()
     {
-        const double proj_dist = computeProjectedDistance();
+        const auto _proj_st = computeProjStateFrom(Vr);
+        const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         std::cout << "SPN energy: " << spn_energy
                   << ", Distance: " << distance
-                  << ", Projected distance: " << proj_dist
+                  << ", Projected distance: " << _proj_st.dist
+                  << ", bd_rms: " << bd_rms
+                  << ", int_rms: " << int_rms
                   << ", Penalty_kap: " << penalty_kap
                   << ", Penalty_lam: " << penalty_lam
                   << "\n";
