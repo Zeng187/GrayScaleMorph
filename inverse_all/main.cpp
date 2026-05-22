@@ -20,6 +20,7 @@
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
 #include <igl/loop.h>
+#include <igl/cotmatrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -206,8 +207,26 @@ int main(int /*argc*/, char* /*argv*/[])
         const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
         const Eigen::SparseMatrix<double> L_face   = computeFaceDualLaplacian(mesh);
 
-        // ARAP solver for lambda-aware P-update at each stage end.
+        // ARAP solver kept as fallback only; active P-update is SGN OptP below.
         LocalGlobalSolver paramSolver(V, F);
+
+        // ---- P-side regularisation matrices for SGN OptP (per patch) -------
+        Eigen::SparseMatrix<double> M_P_2(2 * nV, 2 * nV);
+        M_P_2.setIdentity();
+        Eigen::SparseMatrix<double> L_P_2(2 * nV, 2 * nV);
+        {
+            Eigen::SparseMatrix<double> L_v;
+            igl::cotmatrix(V, F, L_v);
+            L_v = (-L_v).eval();
+            std::vector<Eigen::Triplet<double>> trips;
+            trips.reserve(L_v.nonZeros() * 2);
+            for (int i = 0; i < L_v.outerSize(); ++i)
+                for (Eigen::SparseMatrix<double>::InnerIterator it(L_v, i); it; ++it)
+                    for (int d = 0; d < 2; ++d)
+                        trips.emplace_back(2 * (int)it.row() + d, 2 * (int)it.col() + d, it.value());
+            L_P_2.setFromTriplets(trips.begin(), trips.end());
+        }
+        const Eigen::MatrixXd P_anchor = P;
 
         spdlog::info("Patch {} Step 4: Inverse Design (MGDA).", pd.idx);
 
@@ -373,21 +392,45 @@ int main(int /*argc*/, char* /*argv*/[])
             };
         };
 
-        // ARAP P-update (reused by warm-up and MGDA stages).
-        // Optionally snaps (lambda, kappa) before fitting P; after MrInv
-        // refresh, runs forward Newton + refreshes reg accumulators +
-        // spn_energy, then prints unified stage stats.
+        // SGN OptP with snap-material flow (port from develop_homotopy 41b4187).
+        // 1) snap (lambda, kappa) to nearest feasible candidate
+        // 2) SGN OptP on snapped material -> SGN distance == proj_dist
+        // 3) hard-snap continuous lambda_pf_s/kappa_pf_s to same candidates
         auto runArapPUpdate = [&](const std::string& tag) {
-            Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
-            // Clamp lambda to safe positive range (see develop_homotopy 1cc9a7a).
-            for (int ii = 0; ii < lambdaVec.size(); ++ii) {
-                if (!std::isfinite(lambdaVec(ii)) || lambdaVec(ii) < 1e-3)
-                    lambdaVec(ii) = 1e-3;
+            const double wM_P = config.RuntimeSetting.wM_P;
+            const double wL_P = config.RuntimeSetting.wL_P;
+
+            FaceData<double> lambda_pf_snap(mesh);
+            FaceData<double> kappa_pf_snap(mesh);
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                lambda_pf_snap[f] = ac.feasible_lamb[idx];
+                kappa_pf_snap[f]  = ac.feasible_kapp[idx];
             }
-            Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
-            Eigen::MatrixX2d P_2d = P;
-            paramSolver.solve(P_2d, sTarget, sTarget, 10);
-            P = P_2d;
+
+            auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
+                geometry, F, lambda_pf_snap, kappa_pf_snap,
+                E, nu, ac.thickness,
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+            double P_reg = 0.0;
+            Vr = sparse_gauss_newton_FixMaterial_OptP(
+                geometry, F, targetV, Vr, P,
+                lambda_pf_snap, kappa_pf_snap,
+                masses, M_P_2, L_P_2, P_anchor,
+                kappa_reg + lambda_reg,
+                adjointFunc_OptP, fixedIdx,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                wM_P, wL_P,
+                E, nu, ac.thickness,
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                distance, spn_energy, P_reg);
+
+            for (Face f : mesh.faces()) {
+                lambda_pf_s[f] = lambda_pf_snap[f];
+                kappa_pf_s[f]  = kappa_pf_snap[f];
+            }
+
             Eigen::MatrixXd P_obj(P.rows(), 3);
             P_obj.leftCols(2) = P;
             P_obj.col(2).setZero();
@@ -400,9 +443,10 @@ int main(int /*argc*/, char* /*argv*/[])
             lambda_reg = computeLambdaReg();
             spn_energy = distance + kappa_reg + lambda_reg;
 
+            const Eigen::VectorXd lambdaVec_now = lambda_pf_s.toVector();
             std::cout << "[OptP finish] patch " << pd.idx << " " << tag
-                      << ": lambda range [" << lambdaVec.minCoeff()
-                      << ", " << lambdaVec.maxCoeff() << "]  ";
+                      << ": lambda range [" << lambdaVec_now.minCoeff()
+                      << ", " << lambdaVec_now.maxCoeff() << "]  ";
             printStageStats();
         };
 

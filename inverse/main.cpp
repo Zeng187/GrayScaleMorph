@@ -16,6 +16,7 @@
 #include <igl/readOBJ.h>
 #include <igl/writeOBJ.h>
 #include <igl/loop.h>
+#include <igl/cotmatrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -184,10 +185,32 @@ int main(int /*argc*/, char * /*argv*/[])
     const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
     const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
 
-    // ARAP solver for the lambda-aware P-update done at each stage end.
-    // Initialised once from (V, F): cotmatrix / factorisation is reused
-    // across all stages since V topology doesn't change.
+    // ARAP solver kept around as a fallback only — the active P-update path
+    // is the SGN OptP below (distance-driven).
     LocalGlobalSolver paramSolver(V, F);
+
+    // ---- P-side regularisation matrices (size 2|V| x 2|V|) for SGN OptP ---
+    // M_P_2: per-vertex P-mass (identity), defines ||P - P_anchor||^2.
+    // L_P_2: per-vertex cotan Laplacian on V, kron'd with I_2 for the 2D P.
+    // Both stay constant across stages (V topology unchanged).
+    Eigen::SparseMatrix<double> M_P_2(2 * nV, 2 * nV);
+    M_P_2.setIdentity();
+    Eigen::SparseMatrix<double> L_P_2(2 * nV, 2 * nV);
+    {
+        Eigen::SparseMatrix<double> L_v;
+        igl::cotmatrix(V, F, L_v);
+        L_v = (-L_v).eval();  // libigl uses negative-Laplacian convention
+        std::vector<Eigen::Triplet<double>> trips;
+        trips.reserve(L_v.nonZeros() * 2);
+        for (int i = 0; i < L_v.outerSize(); ++i)
+            for (Eigen::SparseMatrix<double>::InnerIterator it(L_v, i); it; ++it)
+                for (int d = 0; d < 2; ++d)
+                    trips.emplace_back(2 * (int)it.row() + d, 2 * (int)it.col() + d, it.value());
+        L_P_2.setFromTriplets(trips.begin(), trips.end());
+    }
+    // P_anchor: initial parameterisation from Param, reference for the
+    // anchor regulariser inside SGN OptP.
+    const Eigen::MatrixXd P_anchor = P;
 
     spdlog::info("Step 4: Inverse Design (MGDA).");
 
@@ -374,22 +397,57 @@ int main(int /*argc*/, char * /*argv*/[])
         };
     };
 
-    // ARAP P-update lambda (reused by warm-up and MGDA stages).
-    // After P/MrInv refresh, runs forward Newton to pull Vr back to
-    // equilibrium and refreshes reg accumulators + spn_energy, then prints
-    // a unified stage stats line.
+    // OptP via SGN with snap-material flow (port from develop_homotopy commit
+    // 41b4187).  Steps:
+    //   1. Snap (lambda, kappa) to nearest feasible candidate per face into
+    //      local lambda_pf_snap / kappa_pf_snap (continuous state untouched
+    //      for the moment).
+    //   2. Build adjoint + SGN OptP on the SNAPPED material so the SGN's
+    //      distance term equals proj_dist by construction.  Newton step
+    //      monotonic in proj.
+    //   3. After SGN OptP, hard-snap the continuous lambda_pf_s/kappa_pf_s
+    //      to the same candidates so the next stage's OptKap warm-starts
+    //      from snapped material and dist/proj stay continuous across the
+    //      OptP -> OptKap boundary.
     auto runArapPUpdate = [&](const std::string& tag) {
-        Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
-        // Clamp lambda to safe positive range so pathological values don't
-        // blow up sTarget = 1/lambda (see develop_homotopy 1cc9a7a).
-        for (int ii = 0; ii < lambdaVec.size(); ++ii) {
-            if (!std::isfinite(lambdaVec(ii)) || lambdaVec(ii) < 1e-3)
-                lambdaVec(ii) = 1e-3;
+        const double wM_P = config.RuntimeSetting.wM_P;
+        const double wL_P = config.RuntimeSetting.wL_P;
+
+        // 1) Snap material once at start of OptP.
+        FaceData<double> lambda_pf_snap(mesh);
+        FaceData<double> kappa_pf_snap(mesh);
+        for (Face f : mesh.faces()) {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            lambda_pf_snap[f] = ac.feasible_lamb[idx];
+            kappa_pf_snap[f]  = ac.feasible_kapp[idx];
         }
-        Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
-        Eigen::MatrixX2d P_2d = P;
-        paramSolver.solve(P_2d, sTarget, sTarget, 10);
-        P = P_2d;
+
+        // 2) SGN OptP on snapped material — its distance == proj_dist.
+        auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
+            geometry, F, lambda_pf_snap, kappa_pf_snap,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        double P_reg = 0.0;
+        Vr = sparse_gauss_newton_FixMaterial_OptP(
+            geometry, F, targetV, Vr, P,
+            lambda_pf_snap, kappa_pf_snap,
+            masses, M_P_2, L_P_2, P_anchor,
+            kappa_reg + lambda_reg,
+            adjointFunc_OptP, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+            wM_P, wL_P,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+            distance, spn_energy, P_reg);
+
+        // 3) Hard-snap the continuous state so next stage continues from snapped.
+        for (Face f : mesh.faces()) {
+            lambda_pf_s[f] = lambda_pf_snap[f];
+            kappa_pf_s[f]  = kappa_pf_snap[f];
+        }
+
+        // P updated in place; refresh P-dependent quantities for next stage.
         Eigen::MatrixXd P_obj(P.rows(), 3);
         P_obj.leftCols(2) = P;
         P_obj.col(2).setZero();
@@ -397,16 +455,15 @@ int main(int /*argc*/, char * /*argv*/[])
         MrInv = precomputeMrInv(mesh, P, F);
         M_kappa = computeFaceMassKappa(mesh, MrInv);
 
-        // Re-run forward sim with updated MrInv so Vr is back at equilibrium,
-        // refresh reg accumulators (M_kappa changed), recompute spn_energy.
         distance   = recomputeForwardState();
         kappa_reg  = computeKappaReg();
         lambda_reg = computeLambdaReg();
         spn_energy = distance + kappa_reg + lambda_reg;
 
+        const Eigen::VectorXd lambdaVec_now = lambda_pf_s.toVector();
         std::cout << "[OptP finish] " << tag
-                  << ": lambda range [" << lambdaVec.minCoeff()
-                  << ", " << lambdaVec.maxCoeff() << "]  ";
+                  << ": lambda range [" << lambdaVec_now.minCoeff()
+                  << ", " << lambdaVec_now.maxCoeff() << "]  ";
         printStageStats();
     };
 

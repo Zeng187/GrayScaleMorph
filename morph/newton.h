@@ -268,3 +268,46 @@ const SgnIterCallback& iter_cb = sgn_iter_noop,
 const std::vector<double>& cand_other  = std::vector<double>{},
 const std::vector<double>& other_const = std::vector<double>{},
 double alpha_override = -1.0);
+
+
+// ---------------------------------------------------------------------------
+// SGN OptP: optimise the 2D parameterisation P with material (lambda,
+// kappa) held constant.  Variables are [x (3|V|), P (2|V|)].  At each SGN
+// iter:
+//   1. P updated -> MrInv recomputed -> forward Newton solves x to equilibrium.
+//   2. KKT system gives joint (Δx, ΔP) step minimising
+//        distance(x*(P), x_T) + wM_P * ||P - P_anchor||^2
+//                              + wL_P * P^T L_P P + other_reg
+//      under the forward equilibrium constraint.
+// `P_io` is updated in place to the final P.  Returns the updated Vr
+// (equilibrium V at the final P).  Replaces the lambda-aware ARAP P-update.
+Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
+geometrycentral::surface::IntrinsicGeometryInterface& geometry,
+const Eigen::MatrixXi& F,
+const Eigen::MatrixXd& targetV,
+const Eigen::MatrixXd& initV,
+Eigen::MatrixXd& P_io,
+const geometrycentral::surface::FaceData<double>& lambda_pf,
+const geometrycentral::surface::FaceData<double>& kappa_pf,
+const Eigen::VectorXd& masses,
+const Eigen::SparseMatrix<double>& M_P,
+const Eigen::SparseMatrix<double>& L_P,
+const Eigen::MatrixXd& P_anchor,
+double other_reg,
+const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+const std::vector<int>& fixedIdx,
+int max_iters,
+double lim,
+double wM_P,
+double wL_P,
+double E,
+double nu,
+double h,
+double w_s,
+double w_b,
+const std::vector<int>& ref_faces,
+double& final_distance,
+double& final_spn_energy,
+double& final_self_reg,
+const SgnIterCallback& iter_cb = sgn_iter_noop,
+const std::function<void(const Eigen::VectorXd&)>& callback = [](const auto&) {});

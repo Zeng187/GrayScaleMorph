@@ -147,6 +147,25 @@ adjointFunctionWithMaterial_Lay2(geometrycentral::surface::IntrinsicGeometryInte
 // Material penalty function to encourage values towards feasible material property values
 // Creates a smooth penalty that pushes vertex values toward the provided feasible_vals
 // beta controls the sharpness of the penalty (higher = sharper)
+// Adjoint function for OptP: variables are [x (3|V|), P (2|V|)], constants
+// are (lambda_pf, kappa_pf).  Same non-Euclidean plate energy as the
+// forward simulation, but expressed so that P enters through Mr = [P1-P0,
+// P2-P0] per face -> MrInv -> F, dA, and TinyAD autodiffs through it.
+// Used by sparse_gauss_newton_FixMaterial_OptP to build the SGN KKT
+// system for distance-driven P-update (replaces ARAP P-update).
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixMaterial_OptP(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                 const Eigen::MatrixXi &F,
+                                 const geometrycentral::surface::FaceData<double> &lambda_pf,
+                                 const geometrycentral::surface::FaceData<double> &kappa_pf,
+                                 double E,
+                                 double nu,
+                                 double h,
+                                 double w_s,
+                                 double w_b,
+                                 const std::vector<int> &ref_faces);
+
+
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 MaterialPenaltyFunctionPerV(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                             const std::vector<double> &feasible_vals,

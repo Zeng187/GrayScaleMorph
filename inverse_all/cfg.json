@@ -19,6 +19,8 @@
 		"wP_lam": [ 0.0 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 256 ],
+		"wM_P": [ 1e-6 ],
+		"wL_P": [ 0.0 ],
 		"stage_iter": [ 10 ],
 		"warmup_stages": [ 1 ],
 		"warmup_reg_decay": [ 1.0 ],

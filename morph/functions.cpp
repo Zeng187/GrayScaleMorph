@@ -1699,3 +1699,126 @@ MaterialPenaltyFunctionPerF_Joint2D(IntrinsicGeometryInterface &geometry,
 
   return func;
 }
+
+
+// ---------------------------------------------------------------------------
+// adjointFunction_FixMaterial_OptP
+// ---------------------------------------------------------------------------
+// Variables layout (TinyAD 1D scalar array of size 3|V| + 2|V|):
+//   indices [0, 3|V|)        -> x  (per-vertex 3D position)
+//   indices [3|V|, 3|V|+2|V|) -> P  (per-vertex 2D parameterisation)
+// Constants per face: lambda_pf[f], kappa_pf[f].
+// P enters through Mr = [P1-P0, P2-P0] per face, MrInv = Mr^{-1}, dA = 0.5
+// * det(Mr).  TinyAD autodiffs through the 2x2 inverse and determinant.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixMaterial_OptP(IntrinsicGeometryInterface &geometry,
+                                 const Eigen::MatrixXi &F,
+                                 const FaceData<double> &lambda_pf,
+                                 const FaceData<double> &kappa_pf,
+                                 double E,
+                                 double nu,
+                                 double h,
+                                 double w_s,
+                                 double w_b,
+                                 const std::vector<int> &ref_faces)
+{
+  SurfaceMesh &mesh = geometry.mesh;
+
+  const double alpha = E * nu / (1 - nu * nu);
+  const double beta  = E / (2 * (1 + nu));
+  const int    nV    = static_cast<int>(mesh.nVertices());
+  const int    pOff  = 3 * nV;   // P variables start at this offset
+
+  TinyAD::ScalarFunction<1, double, Eigen::Index> func =
+      TinyAD::scalar_function<1>(TinyAD::range(3 * nV + 2 * nV));
+
+  // -- Stretching term --
+  func.add_elements<15>(
+      TinyAD::range(F.rows()),
+      [&, alpha, beta, w_s, lambda_pf, pOff](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+
+        const int v0 = F(f_idx, 0);
+        const int v1 = F(f_idx, 1);
+        const int v2 = F(f_idx, 2);
+
+        Eigen::Matrix<T, 3, 2> M;
+        M << element.variables(3 * v1 + 0) - element.variables(3 * v0 + 0),
+             element.variables(3 * v2 + 0) - element.variables(3 * v0 + 0),
+             element.variables(3 * v1 + 1) - element.variables(3 * v0 + 1),
+             element.variables(3 * v2 + 1) - element.variables(3 * v0 + 1),
+             element.variables(3 * v1 + 2) - element.variables(3 * v0 + 2),
+             element.variables(3 * v2 + 2) - element.variables(3 * v0 + 2);
+
+        Eigen::Matrix<T, 2, 2> Mr;
+        Mr << element.variables(pOff + 2 * v1 + 0) - element.variables(pOff + 2 * v0 + 0),
+              element.variables(pOff + 2 * v2 + 0) - element.variables(pOff + 2 * v0 + 0),
+              element.variables(pOff + 2 * v1 + 1) - element.variables(pOff + 2 * v0 + 1),
+              element.variables(pOff + 2 * v2 + 1) - element.variables(pOff + 2 * v0 + 1);
+
+        Eigen::Matrix<T, 2, 2> MrInv = Mr.inverse();
+        T dA = T(0.5) * Mr.determinant();
+
+        Eigen::Matrix<T, 3, 2> Ff = M * MrInv;
+        Eigen::Matrix<T, 2, 2> a  = Ff.transpose() * Ff;
+
+        T lam     = T(lambda_pf[f_idx]);
+        T lam_sqr = lam * lam;
+        Eigen::Matrix<T, 2, 2> eps_s = a - lam_sqr * Eigen::Matrix<T, 2, 2>::Identity();
+        T trM  = eps_s.trace();
+        T trM2 = (eps_s * eps_s).trace();
+        T Ws   = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) / lam_sqr;
+        return T(w_s) * Ws * dA;
+      });
+
+  // -- Bending term --
+  geometry.requireVertexIndices();
+  func.add_elements<3 * 6 + 3 * 2>(
+      TinyAD::range(F.rows()),
+      [&, alpha, beta, h, w_b, lambda_pf, kappa_pf, ref_faces, pOff](auto &element) -> TINYAD_SCALAR_TYPE(element)
+      {
+        using T = TINYAD_SCALAR_TYPE(element);
+        Eigen::Index f_idx = element.handle;
+
+        const int v0 = F(f_idx, 0);
+        const int v1 = F(f_idx, 1);
+        const int v2 = F(f_idx, 2);
+
+        Eigen::Matrix<T, 3, 2> M;
+        M << element.variables(3 * v1 + 0) - element.variables(3 * v0 + 0),
+             element.variables(3 * v2 + 0) - element.variables(3 * v0 + 0),
+             element.variables(3 * v1 + 1) - element.variables(3 * v0 + 1),
+             element.variables(3 * v2 + 1) - element.variables(3 * v0 + 1),
+             element.variables(3 * v1 + 2) - element.variables(3 * v0 + 2),
+             element.variables(3 * v2 + 2) - element.variables(3 * v0 + 2);
+
+        Eigen::Matrix<T, 2, 2> Mr;
+        Mr << element.variables(pOff + 2 * v1 + 0) - element.variables(pOff + 2 * v0 + 0),
+              element.variables(pOff + 2 * v2 + 0) - element.variables(pOff + 2 * v0 + 0),
+              element.variables(pOff + 2 * v1 + 1) - element.variables(pOff + 2 * v0 + 1),
+              element.variables(pOff + 2 * v2 + 1) - element.variables(pOff + 2 * v0 + 1);
+
+        Eigen::Matrix<T, 2, 2> MrInv = Mr.inverse();
+        T dA = T(0.5) * Mr.determinant();
+
+        Eigen::Matrix<T, 3, 2> Ff = M * MrInv;
+
+        Face f = mesh.face(f_idx);
+        Eigen::Matrix3<T> L = computeShapeOperator_Adj<T>(geometry, element, f, ref_faces);
+
+        T lam     = T(lambda_pf[f_idx]);
+        T kap     = T(kappa_pf[f_idx]);
+        T lam_sqr = lam * lam;
+        Eigen::Matrix2<T> b_bar = lam_sqr * kap * Eigen::Matrix2<T>::Identity();
+        Eigen::Matrix2<T> eps_b = (Ff.transpose() * L * Ff) - b_bar;
+
+        T trM  = eps_b.trace();
+        T trM2 = (eps_b * eps_b).trace();
+        T Wb   = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0) / lam_sqr;
+        return T(w_b) * Wb * dA;
+      });
+
+  return func;
+}

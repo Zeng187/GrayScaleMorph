@@ -1,5 +1,6 @@
 #include "newton.h"
 #include "functions.h"
+#include "morph_functions.hpp"
 #include "parameterization.h"
 #include "simulation_utils.h"
 #include "solvers.h"
@@ -1783,6 +1784,231 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_MGDA(
   return V;
 }
 
+
+// ===========================================================================
+//  SGN OptP: variable = 2D parameterisation P, material (lambda, kappa) const
+// ===========================================================================
+Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
+    IntrinsicGeometryInterface& geometry,
+    const Eigen::MatrixXi& F,
+    const Eigen::MatrixXd& targetV,
+    const Eigen::MatrixXd& initV,
+    Eigen::MatrixXd& P_io,
+    const FaceData<double>& lambda_pf,
+    const FaceData<double>& kappa_pf,
+    const Eigen::VectorXd& masses,
+    const Eigen::SparseMatrix<double>& M_P,
+    const Eigen::SparseMatrix<double>& L_P,
+    const Eigen::MatrixXd& P_anchor,
+    double other_reg,
+    const TinyAD::ScalarFunction<1, double, Eigen::Index>& adjointFunc,
+    const std::vector<int>& fixedIdx,
+    int max_iters,
+    double lim,
+    double wM_P,
+    double wL_P,
+    double E,
+    double nu,
+    double h,
+    double w_s,
+    double w_b,
+    const std::vector<int>& ref_faces,
+    double& final_distance,
+    double& final_spn_energy,
+    double& final_self_reg,
+    const SgnIterCallback& iter_cb,
+    const std::function<void(const Eigen::VectorXd&)>& callback)
+{
+  geometry.requireFaceAreas();
+  geometry.requireVertexIndices();
+
+  SurfaceMesh& mesh = geometry.mesh;
+  const size_t nV = mesh.nVertices();
+  const Eigen::Index P_size = static_cast<Eigen::Index>(2 * nV);
+
+  Eigen::VectorXd xTarget(targetV.size());
+  for(int i = 0; i < targetV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      xTarget(3 * i + j) = targetV(i, j);
+  Eigen::VectorXd x(initV.size());
+  for(int i = 0; i < initV.rows(); ++i)
+    for(int j = 0; j < 3; ++j)
+      x(3 * i + j) = initV(i, j);
+
+  Eigen::VectorXd P_vec(P_size);
+  for(int i = 0; i < (int)nV; ++i) {
+    P_vec(2 * i + 0) = P_io(i, 0);
+    P_vec(2 * i + 1) = P_io(i, 1);
+  }
+  Eigen::VectorXd P_anchor_vec(P_size);
+  for(int i = 0; i < (int)nV; ++i) {
+    P_anchor_vec(2 * i + 0) = P_anchor(i, 0);
+    P_anchor_vec(2 * i + 1) = P_anchor(i, 1);
+  }
+
+  auto unpack_P = [&](const Eigen::VectorXd& Pv) {
+    Eigen::MatrixXd Pm(nV, 2);
+    for(int i = 0; i < (int)nV; ++i) {
+      Pm(i, 0) = Pv(2 * i + 0);
+      Pm(i, 1) = Pv(2 * i + 1);
+    }
+    return Pm;
+  };
+
+  LLTSolver adjointSolver;
+
+  auto distance = [&](const Eigen::VectorXd& Pv) -> double {
+    Eigen::MatrixXd Pm = unpack_P(Pv);
+    // Pre-check: every face's Mr = [P1-P0, P2-P0] must have det > 0.
+    for(int fi = 0; fi < F.rows(); ++fi) {
+      const Eigen::Vector2d e1 = Pm.row(F(fi, 1)) - Pm.row(F(fi, 0));
+      const Eigen::Vector2d e2 = Pm.row(F(fi, 2)) - Pm.row(F(fi, 0));
+      const double det = e1.x() * e2.y() - e1.y() * e2.x();
+      if (!std::isfinite(det) || det < 1e-10)
+        return std::numeric_limits<double>::infinity();
+    }
+    P_io = Pm;
+    FaceData<Eigen::Matrix2d> MrInv_curr = precomputeMrInv(
+        *dynamic_cast<ManifoldSurfaceMesh*>(&mesh), Pm, F);
+    auto simFunc = simulationFunction(geometry, MrInv_curr, lambda_pf, kappa_pf,
+                                      E, nu, h, w_s, w_b, ref_faces);
+    newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
+
+    const Eigen::VectorXd Pd = Pv - P_anchor_vec;
+    const double dist_term      = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    if (!std::isfinite(dist_term))
+      return std::numeric_limits<double>::infinity();
+    const double anchor_reg     = wM_P * Pd.dot(M_P * Pd);
+    const double smoothness_reg = wL_P * Pv.dot(L_P * Pv);
+    return dist_term + anchor_reg + smoothness_reg + other_reg;
+  };
+
+  Eigen::SparseMatrix<double> P_proj = projectionMatrix(fixedIdx, x.size());
+  Eigen::SparseMatrix<double> M_theta_kkt = 2.0 * wM_P * M_P + 2.0 * wL_P * L_P;
+
+  Eigen::VectorXd X(targetV.size() + P_size);
+  X.head(targetV.size()) = x;
+  X.tail(P_size) = P_vec;
+  Eigen::SparseMatrix<double> H = adjointFunc.eval_hessian(X);
+  Eigen::SparseMatrix<double> HGN = buildHGN(2 * masses, P_proj, M_theta_kkt, H);
+
+  auto distanceGrad = [&](const Eigen::VectorXd& Pv) -> Eigen::VectorXd {
+    Eigen::VectorXd X(targetV.size() + Pv.size());
+    X.head(targetV.size()) = x;
+    X.tail(Pv.size()) = Pv;
+    H = adjointFunc.eval_hessian(X);
+
+    for(int j = 0; j < targetV.size(); ++j)
+      H.coeffRef(j, j) += 1e-10;
+
+    Eigen::SparseMatrix<double> A =
+        (P_proj * H.block(0, 0, targetV.size(), targetV.size()) * P_proj.transpose()).eval();
+
+    adjointSolver.factorize(A);
+    if(adjointSolver.info() != Eigen::Success) {
+      auto [f, g, A_proj] = adjointFunc.eval_with_hessian_proj(X);
+      A_proj = (P_proj * A_proj.block(0, 0, targetV.size(), targetV.size()) * P_proj.transpose()).eval();
+      A = 0.9 * A + 0.1 * A_proj;
+      adjointSolver.factorize(A);
+      if(adjointSolver.info() != Eigen::Success)
+        adjointSolver.factorize(A_proj);
+    }
+
+    Eigen::VectorXd b = P_proj * masses.cwiseProduct(x - xTarget);
+    Eigen::VectorXd dir = adjointSolver.solve(b);
+    if(adjointSolver.info() != Eigen::Success)
+      std::cout << "Solver error\n";
+
+    dir = P_proj.transpose() * dir;
+
+    return -2 * H.block(targetV.size(), 0, Pv.size(), targetV.size()) * dir
+         + 2 * wM_P * M_P * (Pv - P_anchor_vec)
+         + 2 * wL_P * L_P * Pv;
+  };
+
+  double energy0 = distance(P_vec);
+  std::cout << "Initial SPN energy (OptP): " << energy0
+            << "\t distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << std::endl;
+
+  LUSolver solver;
+
+  for(int i = 0; i < max_iters; ++i)
+  {
+    double f = distance(P_vec);
+    Eigen::VectorXd g = distanceGrad(P_vec);
+
+    Eigen::VectorXd b(2 * x.size() - 2 * fixedIdx.size() + P_vec.size());
+    b.setZero();
+    b.segment(x.size() - fixedIdx.size(), P_vec.size()) = -g;
+
+    updateHGN(HGN, P_proj, H);
+
+    if(i == 0) solver.compute(HGN);
+    else        solver.factorize(HGN);
+
+    if(solver.info() != Eigen::Success) {
+      std::cout << "Solver error (OptP)\n";
+      final_distance = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+      final_spn_energy = f;
+      final_self_reg = wM_P * (P_vec - P_anchor_vec).dot(M_P * (P_vec - P_anchor_vec))
+                     + wL_P * P_vec.dot(L_P * P_vec);
+      Eigen::MatrixXd Vr(initV.rows(), 3);
+      for(int v = 0; v < initV.rows(); ++v)
+        for(int j = 0; j < 3; ++j)
+          Vr(v, j) = x(3 * v + j);
+      return Vr;
+    }
+
+    Eigen::VectorXd d = solver.solve(b);
+    Eigen::VectorXd deltaP = d.segment(x.size() - fixedIdx.size(), P_vec.size());
+    Eigen::VectorXd deltaX = d.segment(0, x.size() - fixedIdx.size());
+    deltaX = P_proj.transpose() * deltaX;
+
+    Eigen::VectorXd x_old = x;
+    double s = lineSearch(P_vec, deltaP, f, g, distance, [&](double s){ x = x_old + s * deltaX; });
+    if(s < 0) {
+      x = x_old;
+      std::cout << "Line search failed (OptP); P reverted.\n";
+      break;
+    }
+    P_vec += s * deltaP;
+
+    const double _iter_spn  = distance(P_vec);
+    const double _iter_dist = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaP, g)
+              << "\tSPN energy: " << _iter_spn
+              << "\tDistance: " << _iter_dist
+              << "\tStep size: " << s << std::endl;
+    const Eigen::VectorXd Pd_iter = P_vec - P_anchor_vec;
+    const double _iter_self_reg = wM_P * Pd_iter.dot(M_P * Pd_iter)
+                                + wL_P * P_vec.dot(L_P * P_vec);
+    iter_cb(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
+
+    if(TinyAD::newton_decrement(deltaP, g) < lim || solver.info() != Eigen::Success)
+      break;
+
+    callback(x);
+  }
+
+  P_io = unpack_P(P_vec);
+  FaceData<Eigen::Matrix2d> MrInv_final = precomputeMrInv(
+      *dynamic_cast<ManifoldSurfaceMesh*>(&mesh), P_io, F);
+  auto simFunc_final = simulationFunction(geometry, MrInv_final, lambda_pf, kappa_pf,
+                                          E, nu, h, w_s, w_b, ref_faces);
+  newton(x, simFunc_final, adjointSolver, 100, lim, false, fixedIdx);
+
+  final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+  const Eigen::VectorXd Pd_final = P_vec - P_anchor_vec;
+  final_self_reg   = wM_P * Pd_final.dot(M_P * Pd_final)
+                   + wL_P * P_vec.dot(L_P * P_vec);
+  final_spn_energy = final_distance + final_self_reg + other_reg;
+
+  Eigen::MatrixXd Vr(initV.rows(), 3);
+  for(int v = 0; v < initV.rows(); ++v)
+    for(int j = 0; j < 3; ++j)
+      Vr(v, j) = x(3 * v + j);
+  return Vr;
+}
 
 
 // ---------------------------------------------------------------------------
