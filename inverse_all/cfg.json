@@ -21,6 +21,8 @@
 		"betaP": [ 256 ],
 		"wM_P": [ 1e-6 ],
 		"wL_P": [ 0.0 ],
+		"enable_optp": [ false ],
+		"enable_final_optp": [ true ],
 		"stage_iter": [ 10 ],
 		"warmup_stages": [ 1 ],
 		"warmup_reg_decay": [ 1.0 ],

@@ -74,6 +74,8 @@ public:
         double mgda_reg_decay;
         double wM_P;               // anchor regulariser weight for SGN OptP: ||P - P_anchor||^2
         double wL_P;               // smoothness regulariser weight for SGN OptP: P^T L_P P
+        bool   enable_optp;        // false -> skip per-stage OptP substage
+        bool   enable_final_optp;  // true -> run one SGN OptP after stage loop on snapped material
         double mgda_alpha_start;   // per-stage alpha schedule, from start@stage 0
         double mgda_alpha_end;     // to end@stage N-1.  Negative -> fallback to closed-form alpha.
         double mgda_alpha_decay_exp;  // schedule shape: alpha_k = end + (start - end) * (1 - k/(N-1))^exp

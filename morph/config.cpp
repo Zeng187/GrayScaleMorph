@@ -94,6 +94,8 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.mgda_reg_decay     = rt.value("mgda_reg_decay",    nlohmann::json::array({1.0}))[0];
     RuntimeSetting.wM_P                 = rt.value("wM_P",                 nlohmann::json::array({1e-6}))[0];
     RuntimeSetting.wL_P                 = rt.value("wL_P",                 nlohmann::json::array({0.0}))[0];
+    RuntimeSetting.enable_optp          = rt.value("enable_optp",          nlohmann::json::array({true}))[0];
+    RuntimeSetting.enable_final_optp    = rt.value("enable_final_optp",    nlohmann::json::array({true}))[0];
     RuntimeSetting.mgda_alpha_start     = rt.value("mgda_alpha_start",     nlohmann::json::array({-1.0}))[0];
     RuntimeSetting.mgda_alpha_end       = rt.value("mgda_alpha_end",       nlohmann::json::array({-1.0}))[0];
     RuntimeSetting.mgda_alpha_decay_exp = rt.value("mgda_alpha_decay_exp", nlohmann::json::array({1.0}))[0];

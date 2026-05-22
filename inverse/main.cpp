@@ -410,6 +410,18 @@ int main(int /*argc*/, char * /*argv*/[])
     //      from snapped material and dist/proj stay continuous across the
     //      OptP -> OptKap boundary.
     auto runArapPUpdate = [&](const std::string& tag) {
+        if (!config.RuntimeSetting.enable_optp) {
+            // P-update disabled (experiment knob): keep P at P_anchor.  Still
+            // refresh forward equilibrium + reg accumulators so trust-region
+            // and stats see the post-stage state.
+            distance   = recomputeForwardState();
+            kappa_reg  = computeKappaReg();
+            lambda_reg = computeLambdaReg();
+            spn_energy = distance + kappa_reg + lambda_reg;
+            std::cout << "[OptP skipped] " << tag << "  ";
+            printStageStats();
+            return;
+        }
         const double wM_P = config.RuntimeSetting.wM_P;
         const double wL_P = config.RuntimeSetting.wL_P;
 
@@ -680,6 +692,62 @@ int main(int /*argc*/, char * /*argv*/[])
     M_kappa     = M_kappa_best;
     std::cout << "Restored best snapshot: dist=" << dist_best
               << "  proj=" << proj_best << "\n";
+
+    // ---- Optional one-shot final OptP on snapped material -----------------
+    // Runs after the MGDA stage loop so the loop itself stays in continuous
+    // (lambda, kappa) space.  P is then optimised against the snapped
+    // material to align the manufactured geometry with the target.
+    if (config.RuntimeSetting.enable_final_optp) {
+        printf("============================ Final OptP (snap-material) ============================\n");
+        const double wM_P = config.RuntimeSetting.wM_P;
+        const double wL_P = config.RuntimeSetting.wL_P;
+
+        FaceData<double> lambda_pf_snap(mesh);
+        FaceData<double> kappa_pf_snap(mesh);
+        for (Face f : mesh.faces()) {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            lambda_pf_snap[f] = ac.feasible_lamb[idx];
+            kappa_pf_snap[f]  = ac.feasible_kapp[idx];
+        }
+
+        auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
+            geometry, F, lambda_pf_snap, kappa_pf_snap,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        double P_reg = 0.0;
+        Vr = sparse_gauss_newton_FixMaterial_OptP(
+            geometry, F, targetV, Vr, P,
+            lambda_pf_snap, kappa_pf_snap,
+            masses, M_P_2, L_P_2, P_anchor,
+            kappa_reg + lambda_reg,
+            adjointFunc_OptP, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+            wM_P, wL_P,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+            distance, spn_energy, P_reg,
+            makeIterLogger(stage_iter, "FinalOptP"));
+
+        for (Face f : mesh.faces()) {
+            lambda_pf_s[f] = lambda_pf_snap[f];
+            kappa_pf_s[f]  = kappa_pf_snap[f];
+        }
+        MrInv   = precomputeMrInv(mesh, P, F);
+        M_kappa = computeFaceMassKappa(mesh, MrInv);
+        distance   = recomputeForwardState();
+        kappa_reg  = computeKappaReg();
+        lambda_reg = computeLambdaReg();
+        spn_energy = distance + kappa_reg + lambda_reg;
+        writeSummaryRow(stage_iter, "FinalOptP");
+        std::cout << "[Final OptP finish] dist=" << distance
+                  << "  proj=" << computeProjectedDistance() << "\n";
+
+        Eigen::MatrixXd P_obj(P.rows(), 3);
+        P_obj.leftCols(2) = P;
+        P_obj.col(2).setZero();
+        igl::writeOBJ(morph_dir + "patch_0_P_final.obj", P_obj, F);
+    }
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
