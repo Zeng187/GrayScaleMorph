@@ -123,6 +123,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double lim,
                                     double wM,
                                     double wL,
+                                    double theta_anchor,
                                     double E,
                                     double nu,
                                     double h,
@@ -180,6 +181,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
   }
 
   Eigen::VectorXd theta = theta2.toVector();
+  const Eigen::VectorXd anchor_vec = Eigen::VectorXd::Constant(theta.size(), theta_anchor);
   Eigen::VectorXd xTarget(targetV.size());
   for(int i = 0; i < targetV.rows(); ++i)
     for(int j = 0; j < 3; ++j)
@@ -198,7 +200,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     // Unified SPN energy = distance + self regulariser + other-variable regulariser (constant in this stage)
-    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th) + other_reg;
+    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * (th - anchor_vec).dot(M_theta * (th - anchor_vec)) + wL * th.dot(L * th) + other_reg;
   };
 
   // Build matrix P
@@ -242,7 +244,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
     dir = P.transpose() * dir;
 
-    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir + 2 * wM * M_theta * th + 2 * wL * L * th;
+    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir + 2 * wM * M_theta * (th - anchor_vec) + 2 * wL * L * th;
   };
 
 
@@ -307,7 +309,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
-    const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+    const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
       break;
@@ -319,7 +321,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
   const double final_energy = distance(theta);
   final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
   final_spn_energy = final_energy;
-  final_self_reg   = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+  final_self_reg   = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -346,6 +348,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   double lim,
                                   double wM,
                                   double wL,
+                                  double theta_anchor,
                                   double E,
                                   double nu,
                                   double h,
@@ -415,6 +418,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
   // theta is now size |F|
   Eigen::VectorXd theta = theta1.toVector();
+  const Eigen::VectorXd anchor_vec = Eigen::VectorXd::Constant(theta.size(), theta_anchor);
 
   // pack target and init x (still size 3|V|)
   Eigen::VectorXd xTarget(targetV.size());
@@ -439,7 +443,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     // Unified SPN energy = distance + self regulariser + other-variable regulariser (constant in this stage)
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
-           + wM * th.dot(M_theta * th)
+           + wM * (th - anchor_vec).dot(M_theta * (th - anchor_vec))
            + wL * th.dot(L * th)
            + other_reg;
   };
@@ -492,7 +496,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
 
     // gradient wrt theta (size |F|) + regularization
     return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
-           + 2 * wM * M_theta * th
+           + 2 * wM * M_theta * (th - anchor_vec)
            + 2 * wL * L * th;
   };
 
@@ -557,7 +561,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
-    const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+    const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
 
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
@@ -576,7 +580,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
   const double final_energy = distance(theta);
   final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
   final_spn_energy = final_energy;
-  final_self_reg   = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+  final_self_reg   = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -603,6 +607,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double lim,
                                     double wM,
                                     double wL,
+                                    double theta_anchor,
                                     double wP,
                                     double E,
                                     double nu,
@@ -659,6 +664,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   }
 
   Eigen::VectorXd theta = theta2.toVector();
+  const Eigen::VectorXd anchor_vec = Eigen::VectorXd::Constant(theta.size(), theta_anchor);
   Eigen::VectorXd xTarget(targetV.size());
   for(int i = 0; i < targetV.rows(); ++i)
     for(int j = 0; j < 3; ++j)
@@ -678,7 +684,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
     double qp = penaltyFunc.eval(th);
     // Unified SPN energy = distance + self regulariser + wP·penalty + other-variable regulariser (constant)
-    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * th.dot(M_theta * th) + wL * th.dot(L * th) +
+    return (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) + wM * (th - anchor_vec).dot(M_theta * (th - anchor_vec)) + wL * th.dot(L * th) +
            wP * qp + other_reg;
 
   };
@@ -725,7 +731,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     dir = P.transpose() * dir;
 
     auto [qf, qg] = penaltyFunc.eval_with_gradient(th);
-    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir + 2 * wM * M_theta * th + 2 * wL * L * th + wP * qg;
+    return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir + 2 * wM * M_theta * (th - anchor_vec) + 2 * wL * L * th + wP * qg;
   };
 
 
@@ -791,7 +797,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
-    const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+    const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
@@ -804,7 +810,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
   const double final_energy = distance(theta);
   final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
   final_spn_energy = final_energy;
-  final_self_reg   = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+  final_self_reg   = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)
@@ -832,6 +838,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           double lim,
                                                           double wM,
                                                           double wL,
+                                                          double theta_anchor,
                                                           double wP,
                                                           double E,
                                                           double nu,
@@ -907,6 +914,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
   // pack theta/x
   // ----------------------------
   Eigen::VectorXd theta = theta1.toVector();
+  const Eigen::VectorXd anchor_vec = Eigen::VectorXd::Constant(theta.size(), theta_anchor);
 
   Eigen::VectorXd xTarget(targetV.size());
   for(int i = 0; i < targetV.rows(); ++i)
@@ -934,7 +942,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
     // Unified SPN energy = distance + self regulariser + wP·penalty + other-variable regulariser (constant)
     return (x - xTarget).dot(masses.cwiseProduct(x - xTarget))
-           + wM * th.dot(M_theta * th)
+           + wM * (th - anchor_vec).dot(M_theta * (th - anchor_vec))
            + wL * th.dot(L * th)
            + wP * qp
            + other_reg;
@@ -992,7 +1000,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     auto [qf, qg] = penaltyFunc.eval_with_gradient(th);
 
     return -2 * H.block(targetV.size(), 0, th.size(), targetV.size()) * dir
-           + 2 * wM * M_theta * th
+           + 2 * wM * M_theta * (th - anchor_vec)
            + 2 * wL * L * th
            + wP * qg;
   };
@@ -1063,7 +1071,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s << std::endl;
-    const double _iter_self_reg = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+    const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
 
@@ -1084,7 +1092,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
 
   final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
   final_spn_energy = final_energy;
-  final_self_reg   = wM * theta.dot(M_theta * theta) + wL * theta.dot(L * theta);
+  final_self_reg   = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
 
   Eigen::MatrixXd V(targetV.rows(), 3);
   for(int i = 0; i < targetV.rows(); ++i)

@@ -22,6 +22,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <numeric>
 #include <filesystem>
 
 #include <spdlog/spdlog.h>
@@ -222,17 +223,32 @@ int main(int /*argc*/, char * /*argv*/[])
     double penalty_kap = 0.0;
     double penalty_lam = 0.0;
 
+    // Anchor for the mass-term regulariser: pull theta toward the centre of
+    // the feasible candidate set, not toward 0.  For kappa the candidates are
+    // ~symmetric around 0 so kappa_anchor = 0 is fine.  For lambda the
+    // candidates are all > 1 (grayscale material can only expand), so anchor
+    // at the mean of feasible_lamb avoids the mass-reg pulling lambda away
+    // from the feasible region.  Laplacian term is unaffected (L * 1 = 0).
+    const double kappa_anchor  = 0.0;
+    const double lambda_anchor = std::accumulate(ac.feasible_lamb.begin(),
+                                                  ac.feasible_lamb.end(), 0.0)
+                                 / static_cast<double>(ac.feasible_lamb.size());
+    spdlog::info("Reg anchors: kappa_anchor={}, lambda_anchor={:.6f}",
+                 kappa_anchor, lambda_anchor);
+
     // Regularisation accumulators kept in sync between stages so each SGN call
     // receives the *other* variable's regulariser as a constant offset.
     auto computeKappaReg = [&]()
     {
         const Eigen::VectorXd k = kappa_pf_s.toVector();
-        return wM_kap * k.dot(M_kappa * k) + wL_kap * k.dot(L_face * k);
+        const Eigen::VectorXd ko = k - Eigen::VectorXd::Constant(k.size(), kappa_anchor);
+        return wM_kap * ko.dot(M_kappa * ko) + wL_kap * k.dot(L_face * k);
     };
     auto computeLambdaReg = [&]()
     {
         const Eigen::VectorXd l = lambda_pf_s.toVector();
-        return wM_lam * l.dot(M_lambda * l) + wL_lam * l.dot(L_face * l);
+        const Eigen::VectorXd lo = l - Eigen::VectorXd::Constant(l.size(), lambda_anchor);
+        return wM_lam * lo.dot(M_lambda * lo) + wL_lam * l.dot(L_face * l);
     };
     double kappa_reg = computeKappaReg();
     double lambda_reg = computeLambdaReg();
@@ -386,7 +402,8 @@ int main(int /*argc*/, char * /*argv*/[])
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                                                       wM_kap, wL_kap, kappa_anchor, wP_kap,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
@@ -424,7 +441,8 @@ int main(int /*argc*/, char * /*argv*/[])
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
+                                                       config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                                                       wM_lam, wL_lam, lambda_anchor, wP_lam,
                                                        E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);

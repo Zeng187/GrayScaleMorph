@@ -361,7 +361,8 @@ int main(int argc, char* argv[])
             };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_kap, wL_kap, wP_kap,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                wM_kap, wL_kap, 0.0 /*kappa anchor*/, wP_kap,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg,
                 logger_OptKap);
@@ -397,7 +398,8 @@ int main(int argc, char* argv[])
             };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
-                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, wM_lam, wL_lam, wP_lam,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                wM_lam, wL_lam, 0.0 /*lambda anchor TODO compute mean*/, wP_lam,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, self_reg,
                 logger_OptLam);
