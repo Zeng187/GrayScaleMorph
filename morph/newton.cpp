@@ -308,7 +308,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
-              << "\tStep size: " << s << std::endl;
+              << "\tStep size: " << s;
     const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
     if(TinyAD::newton_decrement(deltaTheta, g) < lim || solver.info() != Eigen::Success)
@@ -560,7 +560,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
-              << "\tStep size: " << s << std::endl;
+              << "\tStep size: " << s;
     const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
 
@@ -796,7 +796,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
-              << "\tStep size: " << s << std::endl;
+              << "\tStep size: " << s;
     const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
@@ -1070,7 +1070,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaTheta, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
-              << "\tStep size: " << s << std::endl;
+              << "\tStep size: " << s;
     const double _iter_self_reg = wM * (theta - anchor_vec).dot(M_theta * (theta - anchor_vec)) + wL * theta.dot(L * theta);
     const double _iter_penalty  = penaltyFunc.eval(theta);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, _iter_penalty);
@@ -1341,7 +1341,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaP, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
-              << "\tStep size: " << s << std::endl;
+              << "\tStep size: " << s;
     const Eigen::VectorXd Pd_iter = P_vec - P_anchor_vec;
     const double _iter_self_reg = wM_P * Pd_iter.dot(M_P * Pd_iter)
                                 + wL_P * P_vec.dot(L_P * P_vec);

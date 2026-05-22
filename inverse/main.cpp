@@ -432,6 +432,7 @@ int main(int /*argc*/, char * /*argv*/[])
             // distance to the 1D feasible set at the current theta).
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
             iter_log_ofs << k << ",OptKap," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << self_reg_iter << "," << lambda_reg << ","
@@ -475,6 +476,7 @@ int main(int /*argc*/, char * /*argv*/[])
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
             iter_log_ofs << k << ",OptLam," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << kappa_reg << "," << self_reg_iter << ","
@@ -558,6 +560,7 @@ int main(int /*argc*/, char * /*argv*/[])
                 const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
                 iter_log_ofs << k << ",OptP," << i << ","
                              << spn << "," << dist << "," << pd << ","
                              << kappa_reg << "," << lambda_reg << ","
@@ -745,6 +748,7 @@ int main(int /*argc*/, char * /*argv*/[])
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(reshape_x_to_V(x_iter));
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            std::cout << "\tdist=" << dist << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
             iter_log_ofs << "-1,FinalSnapOptP," << i << ","
                          << spn << "," << dist << "," << dist << ","
                          << kappa_reg << "," << lambda_reg << ","
