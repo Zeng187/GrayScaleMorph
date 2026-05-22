@@ -508,15 +508,10 @@ int main(int argc, char* argv[])
                     distance, spn_energy, P_reg,
                     logger_OptP);
 
-                // Hard-snap (lambda, kappa) to match the material OptP
-                // optimised against; eliminates the dist/proj discontinuity
-                // between OptP-end and the next stage's OptKap iter 0.
-                for (Face f : mesh.faces()) {
-                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
-                                                kappa_pf_s[f], lambda_pf_s[f]);
-                    lambda_pf_s[f] = ac.feasible_lamb[idx];
-                    kappa_pf_s[f]  = ac.feasible_kapp[idx];
-                }
+                // v7 flow: do NOT hard-snap (lambda, kappa) here.  The BCD
+                // stages run entirely in the continuous space; one final
+                // snap-material OptP after the stage loop refines P for the
+                // actually-manufactured discrete design.
                 MrInv = precomputeMrInv(mesh, P, F);
                 M_kappa = computeFaceMassKappa(mesh, MrInv);
                 distance = recomputeForwardState();
@@ -617,6 +612,57 @@ int main(int argc, char* argv[])
         M_kappa     = M_kappa_best;
         spdlog::info("Patch {} restored best snapshot: dist={:.6f}  proj={:.6f}",
                      pd.idx, dist_best, proj_best);
+
+        // ---- Final snap-material OptP --------------------------------------
+        // BCD loop optimised everything in continuous space; one extra SGN
+        // OptP on snapped (= actually manufacturable) material refines P so
+        // the manufactured forward-sim lands as close to V_T as possible.
+        spdlog::info("Patch {} Final SNAP OptP", pd.idx);
+        {
+            FaceData<double> lambda_pf_snap(mesh);
+            FaceData<double> kappa_pf_snap(mesh);
+            for (Face f : mesh.faces()) {
+                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                            kappa_pf_s[f], lambda_pf_s[f]);
+                lambda_pf_snap[f] = ac.feasible_lamb[idx];
+                kappa_pf_snap[f]  = ac.feasible_kapp[idx];
+            }
+            auto adjointFunc_OptP_snap = adjointFunction_FixMaterial_OptP(
+                geometry, F, lambda_pf_snap, kappa_pf_snap,
+                E, nu, ac.thickness,
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+
+            auto logger_OptP_snap = [&](int i, const Eigen::VectorXd& x_iter,
+                                        double spn, double dist, double, double) {
+                const auto _st = computeProjStateFrom(reshape_x_to_V(x_iter));
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_st.V);
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                iter_log_ofs << "-1,FinalSnapOptP," << i << ","
+                             << spn << "," << dist << "," << dist << ","
+                             << kappa_reg << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
+                             << bd_rms << "," << int_rms << "\n";
+            };
+
+            double dummy_dist = 0, dummy_spn = 0, dummy_reg = 0;
+            Vr = sparse_gauss_newton_FixMaterial_OptP(
+                geometry, F, targetV, Vr, P,
+                lambda_pf_snap, kappa_pf_snap,
+                masses, M_P_2, L_P_2, P_anchor,
+                0.0,
+                adjointFunc_OptP_snap, fixedIdx,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                config.RuntimeSetting.wM_P, config.RuntimeSetting.wL_P,
+                E, nu, ac.thickness,
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                dummy_dist, dummy_spn, dummy_reg,
+                logger_OptP_snap);
+            MrInv = precomputeMrInv(mesh, P, F);
+            spdlog::info("Patch {} Final SNAP OptP done: dist={:.6f}", pd.idx, dummy_dist);
+        }
 
 
 #else

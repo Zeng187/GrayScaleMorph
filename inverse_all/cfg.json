@@ -22,7 +22,7 @@
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 50 ],
 		"snap_before_P": [ false ],
-		"stage_iter": [ 10],
+		"stage_iter": [ 5 ],
 		"wP_lam_growth_factor": [ 2.0 ],
 		"wP_kap_growth_factor": [ 2.0 ],
 		"morph_method": [ "homotopy" ]
