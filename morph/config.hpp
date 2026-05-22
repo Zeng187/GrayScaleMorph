@@ -66,6 +66,8 @@ public:
         double w_b;
         double wP_lam;                  // A in penalty = A*(lam^2-lam_i^2)^2 + B*(kap-kap_i)^2
         double wP_kap;                  // B
+        double wM_P;                    // P-anchor mass weight (||P - P_anchor||^2)
+        double wL_P;                    // P-smoothness Laplacian weight
         double penalty_threshold;
         double betaP;
         bool   snap_before_P;           // hard-snap (lambda, kappa) to nearest feasible before each P-update

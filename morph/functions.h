@@ -118,6 +118,24 @@ adjointFunction_FixKap_OptLam2(geometrycentral::surface::IntrinsicGeometryInterf
                                double w_b,
                                const std::vector<int> &ref_faces);
 
+// Adjoint function for OptP: variables are [x (3|V|), P (2|V|)], constants
+// are (lambda_pf, kappa_pf).  Same non-Euclidean plate energy as the
+// forward simulation, but expressed so that P enters through Mr (Mr = [P1-P0,
+// P2-P0] per face) -> MrInv -> F, dA, and TinyAD autodiffs through it.
+// Used by sparse_gauss_newton_FixMaterial_OptP to build the SGN KKT system
+// for distance-driven P-update.
+TinyAD::ScalarFunction<1, double, Eigen::Index>
+adjointFunction_FixMaterial_OptP(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
+                                 const Eigen::MatrixXi &F,
+                                 const geometrycentral::surface::FaceData<double> &lambda_pf,
+                                 const geometrycentral::surface::FaceData<double> &kappa_pf,
+                                 double E,
+                                 double nu,
+                                 double h,
+                                 double w_s,
+                                 double w_b,
+                                 const std::vector<int> &ref_faces);
+
 TinyAD::ScalarFunction<1, double, Eigen::Index>
 adjointFunctionWithMaterial_Lay1(geometrycentral::surface::IntrinsicGeometryInterface &geometry,
                                  const Eigen::MatrixXi &F,

@@ -5,6 +5,7 @@
 // #include <igl/opengl/glfw/Viewer.h>
 #include <igl/read_triangle_mesh.h>
 #include <igl/loop.h>
+#include <igl/cotmatrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -205,9 +206,25 @@ int main(int argc, char* argv[])
         const Eigen::SparseMatrix<double> M_lambda = computeFaceMassLambda(geometry);
         const Eigen::SparseMatrix<double> L_face = computeFaceDualLaplacian(mesh);
 
-        // ARAP solver for the per-stage lambda-aware P-update.  Built once
-        // per patch from (V, F); cotmatrix factorisation reused.
-        LocalGlobalSolver paramSolver(V, F);
+        LocalGlobalSolver paramSolver(V, F);   // legacy; unused by SGN OptP
+
+        // P-side regularisation matrices (size 2|V| x 2|V|), see inverse/main.
+        Eigen::SparseMatrix<double> M_P_2(2 * nV, 2 * nV);
+        M_P_2.setIdentity();
+        Eigen::SparseMatrix<double> L_P_2(2 * nV, 2 * nV);
+        {
+            Eigen::SparseMatrix<double> L_v;
+            igl::cotmatrix(V, F, L_v);
+            L_v = (-L_v).eval();
+            std::vector<Eigen::Triplet<double>> trips;
+            trips.reserve(L_v.nonZeros() * 2);
+            for (int i = 0; i < L_v.outerSize(); ++i)
+                for (Eigen::SparseMatrix<double>::InnerIterator it(L_v, i); it; ++it)
+                    for (int d = 0; d < 2; ++d)
+                        trips.emplace_back(2 * (int)it.row() + d, 2 * (int)it.col() + d, it.value());
+            L_P_2.setFromTriplets(trips.begin(), trips.end());
+        }
+        const Eigen::MatrixXd P_anchor = P;
 
         spdlog::info("Step 4: Inverse Design.");
 
@@ -215,12 +232,9 @@ int main(int argc, char* argv[])
         double wP_kap = config.RuntimeSetting.wP_kap;
         double penalty_threshold = config.RuntimeSetting.penalty_threshold;
         double betaP = config.RuntimeSetting.betaP;
-        // 2D joint hard-min penalty with per-dimension weights (see
-        // inverse/main.cpp for rationale).
-        auto penalty_to_kapp = MaterialJointPenaltyPerF_OptKap(geometry, lambda_pf_s,
-            ac.feasible_kapp, ac.feasible_lamb, wP_lam, wP_kap, betaP);
-        auto penalty_to_lamb = MaterialJointPenaltyPerF_OptLam(geometry, kappa_pf_s,
-            ac.feasible_kapp, ac.feasible_lamb, wP_lam, wP_kap, betaP);
+        // 1D independent hard-min penalties (per-direction wP).
+        auto penalty_to_kapp = MaterialPenaltyFunctionPerF(geometry, ac.feasible_kapp, betaP);
+        auto penalty_to_lamb = MaterialPenaltyFunctionPerF(geometry, ac.feasible_lamb, betaP);
         auto penalty_to_modu = MaterialPenaltyFunctionPerV(geometry, ac.feasible_modl, betaP);
 
         int stage_iter = config.RuntimeSetting.stage_iter;
@@ -250,9 +264,7 @@ int main(int argc, char* argv[])
         double lambda_reg = computeLambdaReg();
         double self_reg   = 0.0;
 
-        // Projected distance: snap (kappa, lambda) to nearest feasible per face,
-        // re-run forward Newton, return mass-weighted distance to target.
-        auto computeProjectedDistance = [&]() -> double {
+        auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) -> double {
             FaceData<double> kappa_pf_proj(mesh);
             FaceData<double> lambda_pf_proj(mesh);
             for (Face f : mesh.faces()) {
@@ -263,7 +275,7 @@ int main(int argc, char* argv[])
             }
             auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
                 E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            Eigen::MatrixXd Vr_proj = Vr;
+            Eigen::MatrixXd Vr_proj = Vr_start;
             newton(geometry, Vr_proj, simFunc_proj,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
             double d2 = 0.0;
@@ -273,6 +285,14 @@ int main(int argc, char* argv[])
                     d2 += masses(3 * i + j) * d * d;
                 }
             return d2;
+        };
+        auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
+        auto reshape_x_to_V = [&](const Eigen::VectorXd& x_vec) {
+            Eigen::MatrixXd V_iter(nV, 3);
+            for (size_t v = 0; v < nV; ++v)
+                for (int j = 0; j < 3; ++j)
+                    V_iter(v, j) = x_vec(3 * v + j);
+            return V_iter;
         };
 
         // Re-run forward Newton on current (P, lambda, kappa) to bring Vr back
@@ -315,7 +335,9 @@ int main(int argc, char* argv[])
                                         + model + "/";
         std::filesystem::create_directories(morphlogs_dir);
         std::ofstream iter_log_ofs(morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
-        iter_log_ofs << "stage,substage,iter,spn,dist\n";
+        iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,"
+                     << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
+                     << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam\n";
         spdlog::info("Patch {} iter log -> {}", pd.idx,
                      morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
 
@@ -326,10 +348,17 @@ int main(int argc, char* argv[])
 
             // -- OptKap --
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            auto logger_OptKap = [&iter_log_ofs, k](int i, const Eigen::VectorXd&,
-                                                     double spn, double dist,
-                                                     double /*self_reg*/, double /*pen*/) {
-                iter_log_ofs << k << ",OptKap," << i << "," << spn << "," << dist << "\n";
+            auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
+                                     double spn, double dist, double self_reg_iter, double /*pen*/) {
+                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                iter_log_ofs << k << ",OptKap," << i << ","
+                             << spn << "," << dist << "," << pd << ","
+                             << self_reg_iter << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
             };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
@@ -338,7 +367,16 @@ int main(int argc, char* argv[])
                 distance, spn_energy, self_reg,
                 logger_OptKap);
             kappa_reg = self_reg;
-            iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "\n";
+            {
+                const double pd_end  = computeProjectedDistance();
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << pd_end << ","
+                             << kappa_reg << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+            }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
             spdlog::info("Patch {} Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
@@ -346,10 +384,17 @@ int main(int argc, char* argv[])
 
             // -- OptLam --
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
-            auto logger_OptLam = [&iter_log_ofs, k](int i, const Eigen::VectorXd&,
-                                                     double spn, double dist,
-                                                     double /*self_reg*/, double /*pen*/) {
-                iter_log_ofs << k << ",OptLam," << i << "," << spn << "," << dist << "\n";
+            auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
+                                     double spn, double dist, double self_reg_iter, double /*pen*/) {
+                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                iter_log_ofs << k << ",OptLam," << i << ","
+                             << spn << "," << dist << "," << pd << ","
+                             << kappa_reg << "," << self_reg_iter << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
             };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
@@ -358,7 +403,16 @@ int main(int argc, char* argv[])
                 distance, spn_energy, self_reg,
                 logger_OptLam);
             lambda_reg = self_reg;
-            iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "\n";
+            {
+                const double pd_end  = computeProjectedDistance();
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << pd_end << ","
+                             << kappa_reg << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+            }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
             spdlog::info("Patch {} Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
@@ -374,33 +428,58 @@ int main(int argc, char* argv[])
                 }
             }
 
-            // -- Lambda-aware ARAP P-update --
+            // -- OptP via SGN (distance-driven) --
             {
-                Eigen::VectorXd lambdaVec = lambda_pf_s.toVector();
-                // Clamp lambda to a safe positive range before inverting so a
-                // pathological zero/negative lambda from SGN cannot push
-                // sTarget to inf/nan and trash the sparse factorisation.
-                for (int ii = 0; ii < lambdaVec.size(); ++ii) {
-                    if (!std::isfinite(lambdaVec(ii)) || lambdaVec(ii) < 1e-3)
-                        lambdaVec(ii) = 1e-3;
-                }
-                Eigen::VectorXd sTarget = 1.0 / lambdaVec.array();
-                Eigen::MatrixX2d P_2d = P;
-                paramSolver.solve(P_2d, sTarget, sTarget, 10);
-                P = P_2d;
+                auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
+                    geometry, F, lambda_pf_s, kappa_pf_s,
+                    E, nu, ac.thickness,
+                    config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
 
-                // Refresh P-dependent quantities.
+                const double wM_P = config.RuntimeSetting.wM_P;
+                const double wL_P = config.RuntimeSetting.wL_P;
+
+                auto logger_OptP = [&](int i, const Eigen::VectorXd& x_iter,
+                                       double spn, double dist, double /*self_reg*/, double /*pen*/) {
+                    const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                    const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                    const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                    iter_log_ofs << k << ",OptP," << i << ","
+                                 << spn << "," << dist << "," << pd << ","
+                                 << kappa_reg << "," << lambda_reg << ","
+                                 << pen_kap << "," << pen_lam << ","
+                                 << wP_kap << "," << wP_lam << ","
+                                 << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                };
+
+                double P_reg = 0.0;
+                Vr = sparse_gauss_newton_FixMaterial_OptP(
+                    geometry, F, targetV, Vr, P,
+                    lambda_pf_s, kappa_pf_s,
+                    masses, M_P_2, L_P_2, P_anchor,
+                    kappa_reg + lambda_reg,
+                    adjointFunc_OptP, fixedIdx,
+                    config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                    wM_P, wL_P,
+                    E, nu, ac.thickness,
+                    config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                    distance, spn_energy, P_reg,
+                    logger_OptP);
+
                 MrInv = precomputeMrInv(mesh, P, F);
                 M_kappa = computeFaceMassKappa(mesh, MrInv);
-
-                distance   = recomputeForwardState();
                 kappa_reg  = computeKappaReg();
                 lambda_reg = computeLambdaReg();
                 spn_energy = distance + kappa_reg + lambda_reg;
-                spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} (lambda range [{:.4f},{:.4f}])",
-                             pd.idx, k, spn_energy, distance, computeProjectedDistance(),
-                             lambdaVec.minCoeff(), lambdaVec.maxCoeff());
-                iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "\n";
+                const double pd_end  = computeProjectedDistance();
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f}",
+                             pd.idx, k, spn_energy, distance, pd_end);
+                iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_end << ","
+                             << kappa_reg << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
             }
 
             // -- Trust-region safeguard --

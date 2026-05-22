@@ -1,13 +1,13 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "beetle_simp" ],
+		"ModelName":    [ "beetle3" ],
 		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
 	"RuntimeSettings": {
 		"MaxIter": [ 20 ],
-		"nFmin": [ 1000 ],
+		"nFmin": [ 500 ],
 		"epsilon": [ 1e-6 ],
 		"wM_kap": [ 0.1 ],
 		"wL_kap": [ 0.1 ],
