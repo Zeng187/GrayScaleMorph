@@ -320,8 +320,7 @@ int main(int argc, char* argv[])
         Eigen::MatrixXd            P_best          = P;
         FaceData<Eigen::Matrix2d>  MrInv_best      = MrInv;
         Eigen::SparseMatrix<double> M_kappa_best   = M_kappa;
-        double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
-        double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
+        // wM / wL are homotopy-schedule, not rolled back on REJECT.
         double wP_lam_best = wP_lam, wP_kap_best = wP_kap;
         double kappa_reg_best  = kappa_reg;
         double lambda_reg_best = lambda_reg;
@@ -465,8 +464,18 @@ int main(int argc, char* argv[])
                     distance, spn_energy, P_reg,
                     logger_OptP);
 
+                // Hard-snap (lambda, kappa) to match the material OptP
+                // optimised against; eliminates the dist/proj discontinuity
+                // between OptP-end and the next stage's OptKap iter 0.
+                for (Face f : mesh.faces()) {
+                    int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                                kappa_pf_s[f], lambda_pf_s[f]);
+                    lambda_pf_s[f] = ac.feasible_lamb[idx];
+                    kappa_pf_s[f]  = ac.feasible_kapp[idx];
+                }
                 MrInv = precomputeMrInv(mesh, P, F);
                 M_kappa = computeFaceMassKappa(mesh, MrInv);
+                distance = recomputeForwardState();
                 kappa_reg  = computeKappaReg();
                 lambda_reg = computeLambdaReg();
                 spn_energy = distance + kappa_reg + lambda_reg;
@@ -508,8 +517,6 @@ int main(int argc, char* argv[])
                 P_best          = P;
                 MrInv_best      = MrInv;
                 M_kappa_best    = M_kappa;
-                wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
-                wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
                 wP_lam_best     = wP_lam;
                 wP_kap_best     = wP_kap;
                 kappa_reg_best  = kappa_reg;
@@ -524,8 +531,7 @@ int main(int argc, char* argv[])
                 P           = P_best;
                 MrInv       = MrInv_best;
                 M_kappa     = M_kappa_best;
-                wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
-                wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
+                // wM / wL keep their schedule-decayed values; not rolled back.
                 wP_lam      = wP_lam_best;
                 wP_kap      = wP_kap_best;
                 kappa_reg   = kappa_reg_best;

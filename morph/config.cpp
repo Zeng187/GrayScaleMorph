@@ -99,6 +99,7 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];
     RuntimeSetting.stage_iter         = rt.value("stage_iter",       nlohmann::json::array({5}))[0];
+    RuntimeSetting.stage_continuous   = rt.value("stage_continuous", nlohmann::json::array({RuntimeSetting.stage_iter / 2}))[0];
     // wP_lam_growth_factor / wP_kap_growth_factor: prefer the per-direction
     // keys; fall back to unified "wP_growth_factor" or default 1.0.
     {

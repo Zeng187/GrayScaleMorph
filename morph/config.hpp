@@ -72,6 +72,7 @@ public:
         double betaP;
         bool   snap_before_P;           // hard-snap (lambda, kappa) to nearest feasible before each P-update
         int    stage_iter;              // outer alternating-stage count
+        int    stage_continuous;        // first N stages: OptP uses continuous material; remaining stages: OptP uses snap material
         double wP_lam_growth_factor;    // initial (1+factor) homotopy step for A=wP_lam
         double wP_kap_growth_factor;    // initial (1+factor) homotopy step for B=wP_kap
         double joint_penalty_alpha;     // legacy field, unused (kept for cfg back-compat)

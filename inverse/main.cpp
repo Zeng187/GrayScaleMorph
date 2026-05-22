@@ -323,8 +323,7 @@ int main(int /*argc*/, char * /*argv*/[])
     Eigen::MatrixXd                 P_best  = P;
     FaceData<Eigen::Matrix2d>       MrInv_best = MrInv;
     Eigen::SparseMatrix<double>     M_kappa_best = M_kappa;
-    double wM_kap_best = wM_kap, wL_kap_best = wL_kap;
-    double wM_lam_best = wM_lam, wL_lam_best = wL_lam;
+    // wM / wL are homotopy-schedule, not rolled back on REJECT (see above).
     double wP_lam_best = wP_lam;
     double wP_kap_best = wP_kap;
     double kappa_reg_best = kappa_reg, lambda_reg_best = lambda_reg;
@@ -470,29 +469,15 @@ int main(int /*argc*/, char * /*argv*/[])
             }
         }
 
-        // ---- OptP via SGN (proj-distance-driven P-update) -----------------
-        // OptP optimises P to minimise the *projected* distance: forward
-        // equilibrium is run with the material snapped to the nearest
-        // feasible (lambda, kappa) candidate per face.  This makes the SGN
-        // target inside OptP exactly equal to `proj_dist`, so a Newton step
-        // is monotone in proj.  Outside the OptP block, the continuous
-        // (lambda_pf_s, kappa_pf_s) state is preserved so the next stage's
-        // OptKap/OptLam keeps optimising in the relaxed continuous space.
+        // ---- OptP via SGN on continuous material --------------------------
+        // The 5-stage BCD loop uses continuous (lambda, kappa) throughout.
+        // After the loop exits + best snapshot is restored, a single extra
+        // SGN OptP on SNAPPED material is run (outside this loop) to refine
+        // P against the actually-manufactured discrete design.
         printf("----------------------------  OptP Start ------------------------------\n");
         {
-            // Snap once at the start of OptP; lambda/kappa are constant during
-            // OptP so the snapped values are stable for the whole SGN run.
-            FaceData<double> lambda_pf_snap(mesh);
-            FaceData<double> kappa_pf_snap(mesh);
-            for (Face f : mesh.faces()) {
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
-                                            kappa_pf_s[f], lambda_pf_s[f]);
-                lambda_pf_snap[f] = ac.feasible_lamb[idx];
-                kappa_pf_snap[f]  = ac.feasible_kapp[idx];
-            }
-
             auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
-                geometry, F, lambda_pf_snap, kappa_pf_snap,    // ← snapped material
+                geometry, F, lambda_pf_s, kappa_pf_s,
                 E, nu, ac.thickness,
                 config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
 
@@ -501,12 +486,15 @@ int main(int /*argc*/, char * /*argv*/[])
 
             auto logger_OptP = [&](int i, const Eigen::VectorXd& x_iter,
                                    double spn, double dist, double self_reg_iter, double /*pen*/) {
-                // dist here is already the projected distance (forward sim ran
-                // on snapped material), so pd == dist by construction.
+                // OptP runs on continuous material here, so `dist` is the
+                // continuous-material distance.  proj_dist needs an explicit
+                // snap-then-forward-sim call to be the true projected
+                // distance (consistent with OptKap / OptLam loggers).
+                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptP," << i << ","
-                             << spn << "," << dist << "," << dist << ","   // proj == dist
+                             << spn << "," << dist << "," << pd << ","
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
@@ -516,7 +504,7 @@ int main(int /*argc*/, char * /*argv*/[])
             double P_reg = 0.0;
             Vr = sparse_gauss_newton_FixMaterial_OptP(
                 geometry, F, targetV, Vr, P,
-                lambda_pf_snap, kappa_pf_snap,    // ← snapped material
+                lambda_pf_s, kappa_pf_s,               // continuous material
                 masses, M_P_2, L_P_2, P_anchor,
                 kappa_reg + lambda_reg,                // other_reg
                 adjointFunc_OptP, fixedIdx,
@@ -527,25 +515,9 @@ int main(int /*argc*/, char * /*argv*/[])
                 distance, spn_energy, P_reg,
                 logger_OptP);
 
-            // P updated.  Now hard-snap the continuous (lambda, kappa) state
-            // to the same feasible candidates OptP just optimised against,
-            // so that:
-            //   - the OptP-end CSV row has a single, consistent material
-            //     (no dist jump from snap -> continuous on the "-1" line),
-            //   - the next stage's OptKap / OptLam starts from the snapped
-            //     material, eliminating the dist/proj discontinuity that
-            //     used to appear at OptKap iter 0,
-            //   - the overall homotopy becomes a proximal-style alternation
-            //     (continuous SGN -> hard snap -> OptP -> repeat).
-            for (Face f : mesh.faces()) {
-                int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
-                                            kappa_pf_s[f], lambda_pf_s[f]);
-                lambda_pf_s[f] = ac.feasible_lamb[idx];
-                kappa_pf_s[f]  = ac.feasible_kapp[idx];
-            }
             MrInv = precomputeMrInv(mesh, P, F);
             M_kappa = computeFaceMassKappa(mesh, MrInv);
-            distance = recomputeForwardState();   // forward sim with snapped material
+            distance = recomputeForwardState();
             kappa_reg = computeKappaReg();
             lambda_reg = computeLambdaReg();
             spn_energy = distance + kappa_reg + lambda_reg;
@@ -591,8 +563,6 @@ int main(int /*argc*/, char * /*argv*/[])
             P_best          = P;
             MrInv_best      = MrInv;
             M_kappa_best    = M_kappa;
-            wM_kap_best     = wM_kap;   wL_kap_best = wL_kap;
-            wM_lam_best     = wM_lam;   wL_lam_best = wL_lam;
             wP_lam_best     = wP_lam;
             wP_kap_best     = wP_kap;
             kappa_reg_best  = kappa_reg;
@@ -611,8 +581,10 @@ int main(int /*argc*/, char * /*argv*/[])
             P           = P_best;
             MrInv       = MrInv_best;
             M_kappa     = M_kappa_best;
-            wM_kap      = wM_kap_best;  wL_kap = wL_kap_best;
-            wM_lam      = wM_lam_best;  wL_lam = wL_lam_best;
+            // wM / wL are part of the homotopy schedule, NOT a state-level
+            // quantity -- they should keep monotonically decaying even when
+            // a stage is rejected.  Same logic argues against rolling back
+            // kappa_reg / lambda_reg (recomputed below from snapshot theta).
             wP_lam      = wP_lam_best;
             wP_kap      = wP_kap_best;
             kappa_reg   = kappa_reg_best;
@@ -677,6 +649,60 @@ int main(int /*argc*/, char * /*argv*/[])
     M_kappa     = M_kappa_best;
     std::cout << "Restored best snapshot: dist=" << dist_best
               << "  proj=" << proj_best << "\n";
+
+    // ---- Final snap-material OptP -----------------------------------------
+    // The BCD loop optimised everything in continuous space.  One extra SGN
+    // OptP on the snapped (= actually manufacturable) material now refines
+    // P so the manufactured forward-sim lands as close to V_T as possible.
+    printf("----------------------------  Final SNAP OptP ------------------------------\n");
+    {
+        FaceData<double> lambda_pf_snap(mesh);
+        FaceData<double> kappa_pf_snap(mesh);
+        for (Face f : mesh.faces()) {
+            int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
+                                        kappa_pf_s[f], lambda_pf_s[f]);
+            lambda_pf_snap[f] = ac.feasible_lamb[idx];
+            kappa_pf_snap[f]  = ac.feasible_kapp[idx];
+        }
+        auto adjointFunc_OptP_snap = adjointFunction_FixMaterial_OptP(
+            geometry, F, lambda_pf_snap, kappa_pf_snap,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+
+        auto logger_OptP_snap = [&](int i, const Eigen::VectorXd& x_iter,
+                                    double spn, double dist, double, double) {
+            // FinalSnapOptP runs after the stage loop on snapped material:
+            // dist itself IS the projected distance (snap-equilibrium V_r
+            // vs V_T).  Still log the current values of penalty / weights
+            // so the CSV row never contains placeholder zeros.
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            iter_log_ofs << "-1,FinalSnapOptP," << i << ","
+                         << spn << "," << dist << "," << dist << ","
+                         << kappa_reg << "," << lambda_reg << ","
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+        };
+
+        double dummy_dist = 0, dummy_spn = 0, dummy_reg = 0;
+        Vr = sparse_gauss_newton_FixMaterial_OptP(
+            geometry, F, targetV, Vr, P,
+            lambda_pf_snap, kappa_pf_snap,
+            masses, M_P_2, L_P_2, P_anchor,
+            0.0,                                   // other_reg = 0 for final snap pass
+            adjointFunc_OptP_snap, fixedIdx,
+            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+            config.RuntimeSetting.wM_P, config.RuntimeSetting.wL_P,
+            E, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+            dummy_dist, dummy_spn, dummy_reg,
+            logger_OptP_snap);
+        // Refresh MrInv with the final P; (lambda_pf_s, kappa_pf_s) stay
+        // continuous - the snap is only used inside the OptP.
+        MrInv = precomputeMrInv(mesh, P, F);
+        std::cout << "[Final SNAP OptP done] dist=" << dummy_dist << "\n";
+    }
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
