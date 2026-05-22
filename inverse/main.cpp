@@ -277,7 +277,12 @@ int main(int /*argc*/, char * /*argv*/[])
             kappa_pf_proj[f]  = ac.feasible_kapp[idx];
             lambda_pf_proj[f] = ac.feasible_lamb[idx];
         }
-        auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
+        // Recompute MrInv from the current P -- inside OptP the outer
+        // `MrInv` lags behind P during SGN inner iters; without this the
+        // proj forward sim would always use the stale P-state MrInv and
+        // bd/int RMS would not track the actual SGN progress.
+        FaceData<Eigen::Matrix2d> MrInv_curr = precomputeMrInv(mesh, P, F);
+        auto simFunc_proj = simulationFunction(geometry, MrInv_curr, lambda_pf_proj, kappa_pf_proj,
                                                E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Eigen::MatrixXd Vr_proj = Vr_start;
         newton(geometry, Vr_proj, simFunc_proj,
