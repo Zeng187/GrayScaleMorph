@@ -407,8 +407,12 @@ int main(int argc, char* argv[])
             }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-            spdlog::info("Patch {} Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
-                         pd.idx, k, spn_energy, distance, computeProjectedDistance(), penalty_kap, penalty_lam);
+            {
+                const auto _st = computeProjStateFrom(Vr);
+                const auto [_bd, _int] = computeBoundaryInteriorRMS(_st.V);
+                spdlog::info("Patch {} Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
+                             pd.idx, k, spn_energy, distance, _st.dist, _bd, _int, penalty_kap, penalty_lam);
+            }
 
             // -- OptLam --
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
@@ -448,8 +452,12 @@ int main(int argc, char* argv[])
             }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
-            spdlog::info("Patch {} Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} Pkap={:.6f} Plam={:.6f}",
-                         pd.idx, k, spn_energy, distance, computeProjectedDistance(), penalty_kap, penalty_lam);
+            {
+                const auto _st = computeProjStateFrom(Vr);
+                const auto [_bd, _int] = computeBoundaryInteriorRMS(_st.V);
+                spdlog::info("Patch {} Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
+                             pd.idx, k, spn_energy, distance, _st.dist, _bd, _int, penalty_kap, penalty_lam);
+            }
 
             // -- Optional joint snap (lambda, kappa) before P-update --
             if (config.RuntimeSetting.snap_before_P) {
@@ -520,8 +528,8 @@ int main(int argc, char* argv[])
                 const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-                spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f}",
-                             pd.idx, k, spn_energy, distance, pd_end);
+                spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f}",
+                             pd.idx, k, spn_energy, distance, pd_end, bd_rms, int_rms);
                 iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_end << ","
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
@@ -661,6 +669,8 @@ int main(int argc, char* argv[])
         // run forward Newton on the snapped material, write the resulting mesh
         // and report the manufacturing distance prominently.
         double final_proj_dist = 0.0;
+        double final_bd_rms    = 0.0;
+        double final_int_rms   = 0.0;
         {
             FaceData<double> kappa_pf_proj(mesh);
             FaceData<double> lambda_pf_proj(mesh);
@@ -680,6 +690,10 @@ int main(int argc, char* argv[])
                     double d = Vr_proj(i, j) - targetV(i, j);
                     final_proj_dist += masses(3 * i + j) * d * d;
                 }
+            // Per-vertex Euclidean RMS on the manufactured proj mesh.
+            auto [_bd, _int] = computeBoundaryInteriorRMS(Vr_proj);
+            final_bd_rms  = _bd;
+            final_int_rms = _int;
             const std::string proj_path = morph_dir + "patch_" + std::to_string(pd.idx) + "_proj.obj";
             igl::writeOBJ(proj_path, Vr_proj, F);
             spdlog::info("Patch {} proj mesh -> {}", pd.idx, proj_path);
@@ -715,6 +729,8 @@ int main(int argc, char* argv[])
         std::cout << "  Patch " << pd.idx
                   << "  FINAL Projected distance (manufactured): "
                   << final_proj_dist << "\n";
+        std::cout << "  Per-vertex RMS (Euclidean, mm)  bd = " << final_bd_rms
+                  << "   int = " << final_int_rms << "\n";
         std::cout << "==========================================================\n";
         std::cout << "\n";
 
