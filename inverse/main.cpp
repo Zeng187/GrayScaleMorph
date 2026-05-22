@@ -259,7 +259,14 @@ int main(int /*argc*/, char * /*argv*/[])
     // return the mass-weighted distance to target.  Vr_start defaults to the
     // current `Vr`; pass a different initial mesh (e.g. SGN iter intermediate)
     // to evaluate the proj_dist at that state.
-    auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) -> double
+    // computeProjStateFrom: snap (lambda, kappa) per face to the nearest
+    // feasible candidate, run forward Newton from Vr_start, and return BOTH
+    // the mass-weighted distance and the resulting Vr_proj.  Callers that
+    // need only the distance ignore .V; callers that need per-vertex RMS
+    // (boundary / interior) use .V directly.  This avoids a second forward
+    // sim per logger invocation.
+    struct ProjState { double dist; Eigen::MatrixXd V; };
+    auto computeProjStateFrom = [&](const Eigen::MatrixXd& Vr_start) -> ProjState
     {
         FaceData<double> kappa_pf_proj(mesh);
         FaceData<double> lambda_pf_proj(mesh);
@@ -267,7 +274,7 @@ int main(int /*argc*/, char * /*argv*/[])
         {
             int idx = find_feasible_idx(ac.feasible_kapp, ac.feasible_lamb,
                                         kappa_pf_s[f], lambda_pf_s[f]);
-            kappa_pf_proj[f] = ac.feasible_kapp[idx];
+            kappa_pf_proj[f]  = ac.feasible_kapp[idx];
             lambda_pf_proj[f] = ac.feasible_lamb[idx];
         }
         auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
@@ -282,9 +289,34 @@ int main(int /*argc*/, char * /*argv*/[])
                 double d = Vr_proj(i, j) - targetV(i, j);
                 d2 += masses(3 * i + j) * d * d;
             }
-        return d2;
+        return { d2, std::move(Vr_proj) };
+    };
+    auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) {
+        return computeProjStateFrom(Vr_start).dist;
     };
     auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
+
+    // Per-vertex Euclidean RMS distance, separated by boundary / interior.
+    // Returned as a pair (bd_rms, int_rms) in physical units.  Unlike the
+    // mass-weighted `dist` field this is the raw uniform-averaged RMS, so
+    // it has direct geometric meaning ("the average vertex is X mm off
+    // target").  bd_rms typically dominates because boundary vertices have
+    // fewer geometric constraints than interior ones.
+    geometry.requireVertexIndices();
+    auto computeBoundaryInteriorRMS = [&](const Eigen::MatrixXd& V_cur) -> std::pair<double, double> {
+        double bd_sum2 = 0.0, int_sum2 = 0.0;
+        int    bd_cnt  = 0,   int_cnt  = 0;
+        for (Vertex v : mesh.vertices()) {
+            const int vi = static_cast<int>(geometry.vertexIndices[v]);
+            const Eigen::Vector3d d = V_cur.row(vi) - targetV.row(vi);
+            const double d2 = d.squaredNorm();
+            if (v.isBoundary()) { bd_sum2 += d2; ++bd_cnt; }
+            else                { int_sum2 += d2; ++int_cnt; }
+        }
+        const double bd_rms  = bd_cnt  > 0 ? std::sqrt(bd_sum2 / bd_cnt)   : 0.0;
+        const double int_rms = int_cnt > 0 ? std::sqrt(int_sum2 / int_cnt) : 0.0;
+        return { bd_rms, int_rms };
+    };
 
     // Re-run forward Newton on the current (P, lambda, kappa) state and
     // recompute mass-weighted distance.  Updates `Vr` in place so the next
@@ -357,7 +389,8 @@ int main(int /*argc*/, char * /*argv*/[])
     std::ofstream iter_log_ofs(morphlogs_dir + "iter_log.csv");
     iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,"
                  << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
-                 << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam\n";
+                 << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam,"
+                 << "bd_rms,int_rms\n";
     spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
 
     // Helper to reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
@@ -388,7 +421,9 @@ int main(int /*argc*/, char * /*argv*/[])
         // OptKap: self_reg = kappa_reg (dynamic), lambda_reg is the constant other_reg.
         auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
                                  double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
-            const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+            const double pd      = _proj_st.dist;
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
             // Always log BOTH penalties (full kappa-side and lambda-side
             // distance to the 1D feasible set at the current theta).
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
@@ -398,7 +433,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << self_reg_iter << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
@@ -411,13 +446,15 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_kap = distance;
         const double proj_after_kap = computeProjectedDistance();
         {
+            const auto _proj_st_end = computeProjStateFrom(Vr);
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         }
 
         printStageStats();
@@ -429,7 +466,9 @@ int main(int /*argc*/, char * /*argv*/[])
         // OptLam: self_reg = lambda_reg (dynamic), kappa_reg is the constant other_reg.
         auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
                                  double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
-            const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+            const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+            const double pd      = _proj_st.dist;
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptLam," << i << ","
@@ -437,7 +476,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << self_reg_iter << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
@@ -450,13 +489,15 @@ int main(int /*argc*/, char * /*argv*/[])
         const double dist_after_lam = distance;
         const double proj_after_lam = computeProjectedDistance();
         {
+            const auto _proj_st_end = computeProjStateFrom(Vr);
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         }
 
         printStageStats();
@@ -508,7 +549,9 @@ int main(int /*argc*/, char * /*argv*/[])
                 // continuous-material distance.  proj_dist needs an explicit
                 // snap-then-forward-sim call to be the true projected
                 // distance (consistent with OptKap / OptLam loggers).
-                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+                const double pd      = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptP," << i << ","
@@ -516,7 +559,7 @@ int main(int /*argc*/, char * /*argv*/[])
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             };
 
             double P_reg = 0.0;
@@ -549,13 +592,15 @@ int main(int /*argc*/, char * /*argv*/[])
             std::cout << "[OptP finish] stage " << k << "  ";
             printStageStats();
             const double pd_optp = computeProjectedDistance();
+            const auto _proj_st_end = computeProjStateFrom(Vr);
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_optp << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         }
         // -------------------------------------------------------------------
 
@@ -693,6 +738,7 @@ int main(int /*argc*/, char * /*argv*/[])
             // dist itself IS the projected distance (snap-equilibrium V_r
             // vs V_T).  Still log the current values of penalty / weights
             // so the CSV row never contains placeholder zeros.
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(reshape_x_to_V(x_iter));
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
             iter_log_ofs << "-1,FinalSnapOptP," << i << ","
@@ -700,7 +746,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
         };
 
         double dummy_dist = 0, dummy_spn = 0, dummy_reg = 0;
@@ -733,6 +779,8 @@ int main(int /*argc*/, char * /*argv*/[])
     // actually produce.  Also report the final manufacturing distance
     // prominently in the log.
     double final_proj_dist = 0.0;
+    double final_bd_rms = 0.0;
+    double final_int_rms = 0.0;
     {
         FaceData<double> kappa_pf_proj(mesh);
         FaceData<double> lambda_pf_proj(mesh);
@@ -757,6 +805,11 @@ int main(int /*argc*/, char * /*argv*/[])
                 double d = Vr_proj(i, j) - targetV(i, j);
                 final_proj_dist += masses(3 * i + j) * d * d;
             }
+
+        // bd / int RMS computed on the actually-manufactured proj mesh.
+        auto [_bd, _int] = computeBoundaryInteriorRMS(Vr_proj);
+        final_bd_rms  = _bd;
+        final_int_rms = _int;
 
         const std::string proj_path = morph_dir + "patch_0_proj.obj";
         igl::writeOBJ(proj_path, Vr_proj, F);
@@ -793,6 +846,8 @@ int main(int /*argc*/, char * /*argv*/[])
     std::cout << "==========================================================\n";
     std::cout << "  FINAL Projected distance (manufactured design):  "
               << final_proj_dist << "\n";
+    std::cout << "  Per-vertex RMS (Euclidean, mm)  bd = " << final_bd_rms
+              << "   int = " << final_int_rms << "\n";
     std::cout << "==========================================================\n";
     std::cout << "\n";
 
