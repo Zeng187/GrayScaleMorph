@@ -264,7 +264,11 @@ int main(int argc, char* argv[])
         double lambda_reg = computeLambdaReg();
         double self_reg   = 0.0;
 
-        auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) -> double {
+        // Snap (lambda, kappa) per face, run forward Newton, return both
+        // mass-weighted distance and the resulting Vr_proj.  bd/int RMS
+        // callers reuse V_proj for free.
+        struct ProjState { double dist; Eigen::MatrixXd V; };
+        auto computeProjStateFrom = [&](const Eigen::MatrixXd& Vr_start) -> ProjState {
             FaceData<double> kappa_pf_proj(mesh);
             FaceData<double> lambda_pf_proj(mesh);
             for (Face f : mesh.faces()) {
@@ -284,9 +288,28 @@ int main(int argc, char* argv[])
                     double d = Vr_proj(i, j) - targetV(i, j);
                     d2 += masses(3 * i + j) * d * d;
                 }
-            return d2;
+            return { d2, std::move(Vr_proj) };
+        };
+        auto computeProjectedDistanceFrom = [&](const Eigen::MatrixXd& Vr_start) {
+            return computeProjStateFrom(Vr_start).dist;
         };
         auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
+        // Per-vertex Euclidean RMS, separated by boundary / interior.
+        geometry.requireVertexIndices();
+        auto computeBoundaryInteriorRMS = [&](const Eigen::MatrixXd& V_cur) -> std::pair<double, double> {
+            double bd_sum2 = 0.0, int_sum2 = 0.0;
+            int    bd_cnt  = 0,   int_cnt  = 0;
+            for (Vertex v : mesh.vertices()) {
+                const int vi = static_cast<int>(geometry.vertexIndices[v]);
+                const Eigen::Vector3d d = V_cur.row(vi) - targetV.row(vi);
+                const double d2 = d.squaredNorm();
+                if (v.isBoundary()) { bd_sum2 += d2; ++bd_cnt; }
+                else                { int_sum2 += d2; ++int_cnt; }
+            }
+            const double bd_rms  = bd_cnt  > 0 ? std::sqrt(bd_sum2 / bd_cnt)   : 0.0;
+            const double int_rms = int_cnt > 0 ? std::sqrt(int_sum2 / int_cnt) : 0.0;
+            return { bd_rms, int_rms };
+        };
         auto reshape_x_to_V = [&](const Eigen::VectorXd& x_vec) {
             Eigen::MatrixXd V_iter(nV, 3);
             for (size_t v = 0; v < nV; ++v)
@@ -336,7 +359,8 @@ int main(int argc, char* argv[])
         std::ofstream iter_log_ofs(morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
         iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,"
                      << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
-                     << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam\n";
+                     << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam,"
+                     << "bd_rms,int_rms\n";
         spdlog::info("Patch {} iter log -> {}", pd.idx,
                      morphlogs_dir + "patch_" + std::to_string(pd.idx) + "_iter_log.csv");
 
@@ -349,7 +373,9 @@ int main(int argc, char* argv[])
             auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
                                      double spn, double dist, double self_reg_iter, double /*pen*/) {
-                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+                const double pd      = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptKap," << i << ","
@@ -368,7 +394,9 @@ int main(int argc, char* argv[])
                 logger_OptKap);
             kappa_reg = self_reg;
             {
-                const double pd_end  = computeProjectedDistance();
+                const auto _proj_st = computeProjStateFrom(Vr);
+                const double pd_end  = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << pd_end << ","
@@ -386,7 +414,9 @@ int main(int argc, char* argv[])
             auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
             auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
                                      double spn, double dist, double self_reg_iter, double /*pen*/) {
-                const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+                const double pd      = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptLam," << i << ","
@@ -405,7 +435,9 @@ int main(int argc, char* argv[])
                 logger_OptLam);
             lambda_reg = self_reg;
             {
-                const double pd_end  = computeProjectedDistance();
+                const auto _proj_st = computeProjStateFrom(Vr);
+                const double pd_end  = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << pd_end << ","
@@ -441,7 +473,9 @@ int main(int argc, char* argv[])
 
                 auto logger_OptP = [&](int i, const Eigen::VectorXd& x_iter,
                                        double spn, double dist, double /*self_reg*/, double /*pen*/) {
-                    const double pd      = computeProjectedDistanceFrom(reshape_x_to_V(x_iter));
+                    const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
+                const double pd      = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                     const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                     const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                     iter_log_ofs << k << ",OptP," << i << ","
@@ -481,7 +515,9 @@ int main(int argc, char* argv[])
                 kappa_reg  = computeKappaReg();
                 lambda_reg = computeLambdaReg();
                 spn_energy = distance + kappa_reg + lambda_reg;
-                const double pd_end  = computeProjectedDistance();
+                const auto _proj_st = computeProjStateFrom(Vr);
+                const double pd_end  = _proj_st.dist;
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
                 spdlog::info("Patch {} Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f}",
