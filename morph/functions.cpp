@@ -1720,11 +1720,13 @@ adjointFunction_FixMaterial_OptP(IntrinsicGeometryInterface &geometry,
                                  const Eigen::MatrixXi &F,
                                  const FaceData<double> &lambda_pf,
                                  const FaceData<double> &kappa_pf,
+                                 const FaceData<Eigen::Matrix2d> &MrInv_anchor,
                                  double E,
                                  double nu,
                                  double h,
                                  double w_s,
                                  double w_b,
+                                 double w_slim,
                                  const std::vector<int> &ref_faces)
 {
   SurfaceMesh &mesh = geometry.mesh;
@@ -1828,6 +1830,49 @@ adjointFunction_FixMaterial_OptP(IntrinsicGeometryInterface &geometry,
         T Wb   = (T(0.5 * alpha) * trM * trM + T(beta) * trM2) * h * h * T(1.0 / 3.0) / lam_sqr;
         return T(w_b) * Wb * dA;
       });
+
+  // -- SLIM-style symmetric Dirichlet barrier on P --
+  // SLIM (Rabinovich 2017, TOG): pulls P toward an injective configuration
+  // and diverges to +inf as any singular value of the Jacobian goes to 0
+  // (face collapsing or flipping).  Concretely, per face:
+  //     J = Mr(P) * MrInv_anchor   (2x2)
+  //     E = tr(J^T J) + tr( (J^T J)^{-1} )
+  //       = sigma_1^2 + sigma_2^2 + 1/sigma_1^2 + 1/sigma_2^2
+  // E achieves its minimum (=4) when J is rotation; E -> inf at det(J)->0.
+  // SGN gradient through E naturally steers P away from foldovers,
+  // replacing the brittle "hard reject" line search.
+  if (w_slim > 0.0)
+  {
+    func.add_elements<6>(
+        TinyAD::range(F.rows()),
+        [&, w_slim, MrInv_anchor, pOff](auto &element) -> TINYAD_SCALAR_TYPE(element)
+        {
+          using T = TINYAD_SCALAR_TYPE(element);
+          Eigen::Index f_idx = element.handle;
+
+          const int v0 = F(f_idx, 0);
+          const int v1 = F(f_idx, 1);
+          const int v2 = F(f_idx, 2);
+
+          Eigen::Matrix<T, 2, 2> Mr;
+          Mr << element.variables(pOff + 2 * v1 + 0) - element.variables(pOff + 2 * v0 + 0),
+                element.variables(pOff + 2 * v2 + 0) - element.variables(pOff + 2 * v0 + 0),
+                element.variables(pOff + 2 * v1 + 1) - element.variables(pOff + 2 * v0 + 1),
+                element.variables(pOff + 2 * v2 + 1) - element.variables(pOff + 2 * v0 + 1);
+
+          const Eigen::Matrix2d MrI_a = MrInv_anchor[f_idx];
+          Eigen::Matrix<T, 2, 2> J = Mr * MrI_a.cast<T>();
+
+          T A2   = (J.transpose() * J).trace();   // sigma_1^2 + sigma_2^2
+          T detJ = J.determinant();               // sigma_1 * sigma_2
+          T invE = A2 / (detJ * detJ);            // 1/sigma_1^2 + 1/sigma_2^2 (2x2 identity)
+          T Esym = A2 + invE;
+
+          // Area weight from the anchor (reference) parameterisation.
+          const double dA_a = 0.5 / MrI_a.determinant();
+          return T(w_slim) * Esym * T(dA_a);
+        });
+  }
 
   return func;
 }

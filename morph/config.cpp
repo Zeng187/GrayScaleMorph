@@ -93,8 +93,9 @@ Config::Config(const std::string& filePath) {
         RuntimeSetting.wP_lam = rt.value("wP_lam", nlohmann::json::array({default_wP}))[0];
         RuntimeSetting.wP_kap = rt.value("wP_kap", nlohmann::json::array({default_wP}))[0];
     }
-    RuntimeSetting.wM_P = rt.value("wM_P", nlohmann::json::array({1e-4}))[0];
-    RuntimeSetting.wL_P = rt.value("wL_P", nlohmann::json::array({1e-3}))[0];
+    RuntimeSetting.wM_P  = rt.value("wM_P",  nlohmann::json::array({1e-4}))[0];
+    RuntimeSetting.wL_P  = rt.value("wL_P",  nlohmann::json::array({1e-3}))[0];
+    RuntimeSetting.wSLIM = rt.value("wSLIM", nlohmann::json::array({0.0}))[0];
     RuntimeSetting.penalty_threshold  = rt["penalty_threshold"][0];
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];

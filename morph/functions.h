@@ -129,11 +129,13 @@ adjointFunction_FixMaterial_OptP(geometrycentral::surface::IntrinsicGeometryInte
                                  const Eigen::MatrixXi &F,
                                  const geometrycentral::surface::FaceData<double> &lambda_pf,
                                  const geometrycentral::surface::FaceData<double> &kappa_pf,
+                                 const geometrycentral::surface::FaceData<Eigen::Matrix2d> &MrInv_anchor,
                                  double E,
                                  double nu,
                                  double h,
                                  double w_s,
                                  double w_b,
+                                 double w_slim,
                                  const std::vector<int> &ref_faces);
 
 TinyAD::ScalarFunction<1, double, Eigen::Index>

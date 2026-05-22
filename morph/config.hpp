@@ -68,6 +68,7 @@ public:
         double wP_kap;                  // B
         double wM_P;                    // P-anchor mass weight (||P - P_anchor||^2)
         double wL_P;                    // P-smoothness Laplacian weight
+        double wSLIM;                   // SLIM symmetric-Dirichlet barrier weight (foldover prevention)
         double penalty_threshold;
         double betaP;
         bool   snap_before_P;           // hard-snap (lambda, kappa) to nearest feasible before each P-update

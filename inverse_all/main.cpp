@@ -226,6 +226,7 @@ int main(int argc, char* argv[])
             L_P_2.setFromTriplets(trips.begin(), trips.end());
         }
         const Eigen::MatrixXd P_anchor = P;
+        const FaceData<Eigen::Matrix2d> MrInv_anchor = precomputeMrInv(mesh, P_anchor, F);
 
         spdlog::info("Step 4: Inverse Design.");
 
@@ -489,9 +490,10 @@ int main(int argc, char* argv[])
             // -- OptP via SGN (distance-driven) --
             {
                 auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
-                    geometry, F, lambda_pf_s, kappa_pf_s,
+                    geometry, F, lambda_pf_s, kappa_pf_s, MrInv_anchor,
                     E, nu, ac.thickness,
-                    config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+                    config.RuntimeSetting.w_s, config.RuntimeSetting.w_b,
+                    config.RuntimeSetting.wSLIM, ref_faces);
 
                 const double wM_P = config.RuntimeSetting.wM_P;
                 const double wL_P = config.RuntimeSetting.wL_P;
@@ -646,9 +648,10 @@ int main(int argc, char* argv[])
                 kappa_pf_snap[f]  = ac.feasible_kapp[idx];
             }
             auto adjointFunc_OptP_snap = adjointFunction_FixMaterial_OptP(
-                geometry, F, lambda_pf_snap, kappa_pf_snap,
+                geometry, F, lambda_pf_snap, kappa_pf_snap, MrInv_anchor,
                 E, nu, ac.thickness,
-                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b,
+                config.RuntimeSetting.wSLIM, ref_faces);
 
             auto logger_OptP_snap = [&](int i, const Eigen::VectorXd& x_iter,
                                         double spn, double dist, double, double) {

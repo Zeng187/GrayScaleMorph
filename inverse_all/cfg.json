@@ -6,7 +6,7 @@
 		"Postfix":      [ ".obj" ]
 	},
 	"RuntimeSettings": {
-		"MaxIter": [ 5 ],
+		"MaxIter": [ 10 ],
 		"nFmin": [ 500 ],
 		"epsilon": [ 1e-6 ],
 		"wM_kap": [ 0.1 ],
@@ -18,11 +18,12 @@
 		"wP_lam": [ 0.1 ],
 		"wP_kap": [ 0.1 ],
 		"wM_P": [ 1e-6 ],
-		"wL_P": [ 0.0 ],
+		"wL_P": [ 1e-5 ],
+		"wSLIM": [ 1e-4 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 50 ],
 		"snap_before_P": [ false ],
-		"stage_iter": [ 5 ],
+		"stage_iter": [ 10 ],
 		"wP_lam_growth_factor": [ 2.0 ],
 		"wP_kap_growth_factor": [ 2.0 ],
 		"morph_method": [ "homotopy" ]
