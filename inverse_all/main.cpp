@@ -400,7 +400,7 @@ int main(int argc, char* argv[])
                              << self_reg_iter << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             };
             Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                 adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
@@ -420,7 +420,7 @@ int main(int argc, char* argv[])
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
@@ -446,7 +446,7 @@ int main(int argc, char* argv[])
                              << kappa_reg << "," << self_reg_iter << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             };
             Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                 adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
@@ -466,7 +466,7 @@ int main(int argc, char* argv[])
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             }
             penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
             penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
@@ -511,7 +511,7 @@ int main(int argc, char* argv[])
                                  << kappa_reg << "," << lambda_reg << ","
                                  << pen_kap << "," << pen_lam << ","
                                  << wP_kap << "," << wP_lam << ","
-                                 << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                                 << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
                 };
 
                 double P_reg = 0.0;
@@ -549,7 +549,7 @@ int main(int argc, char* argv[])
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
             }
 
             // -- Trust-region safeguard --
@@ -657,8 +657,10 @@ int main(int argc, char* argv[])
                                         double spn, double dist, double, double) {
                 const auto _st = computeProjStateFrom(reshape_x_to_V(x_iter));
                 const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_st.V);
-                const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
-                const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                // FinalSnap uses snap material inside SGN, so report penalty
+                // against the same snap (κ, λ) — by construction ~= 0.
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
                 std::cout << "\tdist=" << dist << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
                 iter_log_ofs << "-1,FinalSnapOptP," << i << ","
                              << spn << "," << dist << "," << dist << ","
@@ -684,6 +686,23 @@ int main(int argc, char* argv[])
                 logger_OptP_snap);
             MrInv = precomputeMrInv(mesh, P, F);
             spdlog::info("Patch {} Final SNAP OptP done: dist={:.6f}", pd.idx, dummy_dist);
+
+            // Ensure the CSV always carries a FinalSnapOptP summary row, even
+            // when SGN exited on the very first iteration via line-search
+            // failure (the inner logger only fires after a successful step).
+            {
+                const auto _st = computeProjStateFrom(Vr);
+                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_st.V);
+                const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
+                const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
+                iter_log_ofs << "-1,FinalSnapOptP,-1,"
+                             << dummy_spn << "," << dummy_dist << "," << _st.dist << ","
+                             << kappa_reg << "," << lambda_reg << ","
+                             << pen_kap << "," << pen_lam << ","
+                             << wP_kap << "," << wP_lam << ","
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
+                             << bd_rms << "," << int_rms << "\n";
+            }
         }
 
 

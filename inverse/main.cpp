@@ -465,6 +465,8 @@ int main(int /*argc*/, char * /*argv*/[])
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            spdlog::info("Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
+                         k, spn_energy, distance, proj_after_kap, bd_rms, int_rms, pen_kap, pen_lam);
             iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
@@ -509,6 +511,8 @@ int main(int /*argc*/, char * /*argv*/[])
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            spdlog::info("Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
+                         k, spn_energy, distance, proj_after_lam, bd_rms, int_rms, pen_kap, pen_lam);
             iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
@@ -614,6 +618,8 @@ int main(int /*argc*/, char * /*argv*/[])
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            spdlog::info("Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f}",
+                         k, spn_energy, distance, pd_optp, bd_rms, int_rms);
             iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_optp << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
@@ -758,8 +764,10 @@ int main(int /*argc*/, char * /*argv*/[])
             // vs V_T).  Still log the current values of penalty / weights
             // so the CSV row never contains placeholder zeros.
             const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(reshape_x_to_V(x_iter));
-            const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
-            const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+            // FinalSnap uses snap material inside SGN, so report penalty
+            // against the same snap (κ, λ) — by construction ~= 0.
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
             std::cout << "\tdist=" << dist << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
             iter_log_ofs << "-1,FinalSnapOptP," << i << ","
                          << spn << "," << dist << "," << dist << ","
@@ -785,6 +793,23 @@ int main(int /*argc*/, char * /*argv*/[])
         // Refresh MrInv with the final P; (lambda_pf_s, kappa_pf_s) stay
         // continuous - the snap is only used inside the OptP.
         MrInv = precomputeMrInv(mesh, P, F);
+
+        // Ensure the CSV always carries a FinalSnapOptP summary row even when
+        // SGN exited on the very first inner iter via line-search failure
+        // (the per-iter logger only fires after a successful step).
+        {
+            const auto _st = computeProjStateFrom(Vr);
+            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_st.V);
+            const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
+            const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
+            iter_log_ofs << "-1,FinalSnapOptP,-1,"
+                         << dummy_spn << "," << dummy_dist << "," << _st.dist << ","
+                         << kappa_reg << "," << lambda_reg << ","
+                         << pen_kap << "," << pen_lam << ","
+                         << wP_kap << "," << wP_lam << ","
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
+                         << bd_rms << "," << int_rms << "\n";
+        }
         std::cout << "[Final SNAP OptP done] dist=" << dummy_dist << "\n";
     }
 
