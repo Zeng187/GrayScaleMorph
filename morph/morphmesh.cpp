@@ -288,7 +288,8 @@ void Morphmesh::ComputeMorphingFormTLayers(
     const M_Poly_Curve& _moduls_curve,
     const double & thickness,
     Eigen::VectorXd& _lambda_pv,
-    Eigen::VectorXd& _kappa_pv)
+    Eigen::VectorXd& _kappa_pv,
+    double kappa_factor)
 {
     int nV = t_layer_pv_1_.size();
 
@@ -297,10 +298,11 @@ void Morphmesh::ComputeMorphingFormTLayers(
         double t1 = t_layer_pv_1_[i];
         double t2 = t_layer_pv_2_[i];
 
-        // lambda = 0.5 * (strain(t1) + strain(t2))
-        _lambda_pv[i] = compute_lamb_d(_strain_curve, t1, t2);
-        // kappa = 1.5 * (strain(t1) - strain(t2)) / thickness
-        _kappa_pv[i] = compute_curv_d(_strain_curve, thickness, t1, t2);
+        // Bilayer modulus-weighted effective stretch (reduces to 0.5*(s1+s2) average
+        // when E_1 = E_2).
+        _lambda_pv[i] = compute_lamb_d(_strain_curve, _moduls_curve, t1, t2);
+        // Scheme-A (kappa_factor != 0) or modulus-weighted physics fallback.
+        _kappa_pv[i] = compute_curv_d(_strain_curve, _moduls_curve, thickness, t1, t2, kappa_factor);
     }
 }
 

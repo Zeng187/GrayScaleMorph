@@ -5,52 +5,129 @@
 #include <cmath>
 #include "common.hpp"
 #include<Eigen/core>
+#include <tkspline/spline.h>
 
 
+// Backed by natural cubic spline (tk::spline). Name kept for minimum churn —
+// it's now an interpolating spline, not a polynomial.
 struct M_Poly_Curve
 {
-	std::vector<double> coeffs;
-	int order = 0;
+	tk::spline curve;
 };
 
-template <typename T>
-inline T eval_poly(const M_Poly_Curve& _curve, T x) {
-	T res = T(0);
-	for (int i = _curve.order - 1; i >= 0; i--) {
-		res = res * x + T(_curve.coeffs[i]);
+inline double eval_poly(const M_Poly_Curve& c, double t) {
+	return c.curve(t);
+}
+
+inline double compute_lamb_s(const M_Poly_Curve& c, double t) {
+	return 1.0 + eval_poly(c, t);
+}
+
+// Bilayer modulus-weighted effective stretch.  (E_i = single-layer modulus,
+// s_i = single-layer free strain.)  Reduces to the equal-modulus average
+// 1 + 0.5*(s1+s2) when E_1 = E_2.
+inline double compute_lamb_d(const M_Poly_Curve& strain_curve,
+                             const M_Poly_Curve& modulus_curve,
+                             double t1, double t2) {
+	const double s1 = eval_poly(strain_curve, t1);
+	const double s2 = eval_poly(strain_curve, t2);
+	const double E1 = eval_poly(modulus_curve, t1);
+	const double E2 = eval_poly(modulus_curve, t2);
+	return 1.0 + (E1 * s1 + E2 * s2) / (E1 + E2);
+}
+
+inline double compute_modu_s(const M_Poly_Curve& c, double t) {
+	return eval_poly(c, t);
+}
+
+inline double compute_modu_d(const M_Poly_Curve& c, double t1, double t2) {
+	return 0.5 * (eval_poly(c, t1) + eval_poly(c, t2));
+}
+
+// Curvature from dual-layer dose pair.
+//   Scheme A (kappa_factor != 0): experimentally-calibrated, modulus-INDEPENDENT
+//     kappa = kappa_factor * (s1 - s2) / thickness.
+//   Fallback (kappa_factor == 0): modulus-weighted bilayer physics, which
+//     reduces to 1.5*(s1-s2)/h when E_1=E_2.
+inline double compute_curv_d(const M_Poly_Curve& strain_curve,
+                             const M_Poly_Curve& modulus_curve,
+                             double thickness, double t1, double t2,
+                             double kappa_factor = 0.0) {
+	const double s1 = eval_poly(strain_curve, t1);
+	const double s2 = eval_poly(strain_curve, t2);
+	if (kappa_factor != 0.0) {
+		// Scheme A: experimentally-calibrated, modulus-independent.
+		return kappa_factor * (s1 - s2) / thickness;
 	}
-	return res;
+	// Fallback: modulus-weighted bilayer physics.
+	const double E1 = eval_poly(modulus_curve, t1);
+	const double E2 = eval_poly(modulus_curve, t2);
+	const double S  = E1 + E2;
+	const double P  = E1 * E2;
+	return 24.0 * P * (s1 - s2) / (thickness * (S * S + 12.0 * P));
 }
 
-template <typename T>
-inline T compute_lamb_s(const M_Poly_Curve& _curve, T t) {
-	return 1 + eval_poly(_curve, t);
-}
+// Thin-plate spline (TPS) representation of E_eff(lambda, kappa^2).
+// Off-line construction (see S0_MaterialGen/material_gen_tps.py):
+//   1. Compute N=28 unique anchor (lambda_k, kappa_k, E_eff_k) via the
+//      modulus-weighted bilayer formulas above on the 7x7 dose grid
+//      (i <= j to drop the kappa-sign duplicates).
+//   2. Normalize: lambda_hat = (lambda - lambda_mid) / lambda_half_range,
+//                 kappa_sq_hat = kappa^2 / kappa_sq_max.
+//   3. Solve [K P; P^T 0] [a; b] = [E; 0] for the N+3 weights, where
+//      K_{ij} = phi(||p_i - p_j||), P_{i,:} = [1, lambda_hat_i, kappa_sq_hat_i],
+//      phi(r) = r^2 * log(r).
+struct M_Surface_TPS {
+    std::vector<double> anchors_lambda_hat;     // size N
+    std::vector<double> anchors_kappa_sq_hat;   // size N
+    std::vector<double> tps_weights;            // size N + 3 (a_1..a_N, b_0, b_1, b_2)
+    double lambda_mid = 0.0;
+    double lambda_half_range = 1.0;
+    double kappa_sq_max = 1.0;
+    bool loaded = false;
+};
 
-template <typename T>
-inline T compute_lamb_d(const M_Poly_Curve& _curve, T t1, T t2) {
-	T val_1 = eval_poly(_curve, t1);
-	T val_2 = eval_poly(_curve, t2);
-	return 1 + T(0.5) * (val_1 + val_2);
-}
+// Backwards-compatible alias: existing call-sites in functions.cpp/h and
+// newton.cpp/h still spell out M_Surface_LK; they now resolve to the TPS
+// struct without touching their signatures.
+using M_Surface_LK = M_Surface_TPS;
 
+// TinyAD-friendly TPS evaluation.  T may be double or a TinyAD scalar.
+//   phi(r) = r^2 log(r) = 0.5 * r^2 * log(r^2), with phi(0) := 0.
+//
+// Soft floor at E_min = 0.1 MPa: defensive against TPS extrapolation outside
+// the convex hull of the 28 anchors going non-physical.  Smooth approximation
+// of max(E, E_min) so TinyAD gradients stay defined everywhere.
 template <typename T>
-inline T compute_modu_s(const M_Poly_Curve& _curve, T t) {
-	return eval_poly(_curve, t);
-}
+inline T compute_E_lk(const M_Surface_TPS& s, T lambda, T kappa) {
+    using std::log;
+    using std::sqrt;
 
-template <typename T>
-inline T compute_modu_d(const M_Poly_Curve& _curve, T t1, T t2) {
-	T val_1 = eval_poly(_curve, t1);
-	T val_2 = eval_poly(_curve, t2);
-	return T(0.5) * (val_1 + val_2);
-}
+    const T lh  = (lambda - T(s.lambda_mid)) / T(s.lambda_half_range);
+    const T ksh = (kappa * kappa) / T(s.kappa_sq_max);
 
-template <typename T>
-inline T compute_curv_d(const M_Poly_Curve& _curve, double thickness, T t1, T t2) {
-	T val_1 = eval_poly(_curve, t1);
-	T val_2 = eval_poly(_curve, t2);
-	return T(1.5) * (val_1 - val_2) / T(thickness);
+    const int N = static_cast<int>(s.anchors_lambda_hat.size());
+    T E = T(0);
+
+    // TPS radial basis sum
+    for (int k = 0; k < N; ++k) {
+        const T dx = lh  - T(s.anchors_lambda_hat[k]);
+        const T dy = ksh - T(s.anchors_kappa_sq_hat[k]);
+        const T r2 = dx * dx + dy * dy;
+        // phi(r) = 0.5 * r^2 * log(r^2);  phi(0) := 0.
+        const T basis = (r2 > T(1e-30)) ? T(0.5) * r2 * log(r2) : T(0);
+        E += T(s.tps_weights[k]) * basis;
+    }
+
+    // Affine part: b_0 + b_1*lambda_hat + b_2*kappa_sq_hat
+    E += T(s.tps_weights[N    ]);
+    E += T(s.tps_weights[N + 1]) * lh;
+    E += T(s.tps_weights[N + 2]) * ksh;
+
+    // Smooth floor: max(E, E_min) with C^infty approximation.
+    const T E_min = T(0.1);
+    const T diff = E - E_min;
+    return E_min + T(0.5) * (diff + sqrt(diff * diff + T(1e-4)));
 }
 
 // Find the index of the nearest feasible (kap, lam) pair to (kap, lam) jointly
@@ -180,6 +257,7 @@ public:
 	int count =0;
 
 	double thickness = 1.0;
+	double kappa_factor = 0.0;   // scheme-A curvature coefficient; 0 => use physics fallback
 
 
 	M_Poly_Curve m_strain_curve;
@@ -193,6 +271,7 @@ public:
 	ActiveComposite(const std::string& filePath);
 
 	void ComputeFeasibleVals();
+	void LoadEsurface(const std::string& filePath);
 
 	// std::vector<double> lambda;
 	// std::vector<double> kappa;
@@ -209,6 +288,7 @@ public:
 	// M_Poly_Curve m_kappa_curve;
 	// M_Poly_Curve m_moduls_curve;
 
+	M_Surface_TPS m_E_surface;
 
 };
 

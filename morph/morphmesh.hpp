@@ -59,7 +59,8 @@ public:
         const M_Poly_Curve& _moduls_curve,
         const double & thickness,
         Eigen::VectorXd& _lambda_pv,
-        Eigen::VectorXd& _kappa_pv);
+        Eigen::VectorXd& _kappa_pv,
+        double kappa_factor = 0.0);
 
     static void RestrictRange(Eigen::VectorXd& _data, double range_m,double range_M);
 

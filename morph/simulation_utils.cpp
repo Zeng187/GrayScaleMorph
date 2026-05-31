@@ -8,6 +8,7 @@
 #include <geometrycentral/surface/intrinsic_geometry_interface.h>
 #include <geometrycentral/surface/surface_mesh.h>
 #include <vector>
+#include <fstream>
 
 Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry)
 {
@@ -32,6 +33,63 @@ Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryI
   }
   masses /= totalArea;
   return masses;
+}
+
+Eigen::VectorXd loadVertexMassFromFile(const std::string& path, int nV)
+{
+  std::ifstream ifs(path);
+  if(!ifs.is_open()) return Eigen::VectorXd();
+
+  Eigen::VectorXd v_mass = Eigen::VectorXd::Zero(nV);
+  int idx;
+  double val;
+  int read_count = 0;
+  while(ifs >> idx >> val)
+  {
+    if(idx >= 0 && idx < nV)
+    {
+      v_mass[idx] = val;
+      ++read_count;
+    }
+  }
+  if(read_count == 0) return Eigen::VectorXd();
+
+  // Normalise so sum(v_mass) = 1; the broadcast 3nV vector then has sum = 3,
+  // matching `computeVertexMasses`'s convention (each vertex contributes its
+  // area/totalArea three times for xyz).
+  const double sum_in = v_mass.sum();
+  if(sum_in <= 0) return Eigen::VectorXd();
+  v_mass /= sum_in;
+
+  Eigen::VectorXd masses_3nV = Eigen::VectorXd::Zero(3 * nV);
+  for(int v = 0; v < nV; ++v)
+  {
+    masses_3nV(3 * v + 0) = v_mass[v];
+    masses_3nV(3 * v + 1) = v_mass[v];
+    masses_3nV(3 * v + 2) = v_mass[v];
+  }
+  return masses_3nV;
+}
+
+Eigen::VectorXi loadVertexClassFromFile(const std::string& path, int nV)
+{
+  std::ifstream ifs(path);
+  if(!ifs.is_open()) return Eigen::VectorXi();
+
+  Eigen::VectorXi cls = Eigen::VectorXi::Zero(nV);
+  int idx;
+  int val;
+  int read_count = 0;
+  while(ifs >> idx >> val)
+  {
+    if(idx >= 0 && idx < nV)
+    {
+      cls[idx] = val;
+      ++read_count;
+    }
+  }
+  if(read_count == 0) return Eigen::VectorXi();
+  return cls;
 }
 
 Eigen::SparseMatrix<double>

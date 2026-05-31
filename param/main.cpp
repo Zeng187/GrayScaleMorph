@@ -41,18 +41,21 @@ int main(int /*argc*/, char* /*argv*/[])
 
     spdlog::info("Param (single mesh): start.");
 
-    const std::string model      = config.ModelSetting.ModelName;
-    const std::string in_path    = config.PathSetting.MeshesDir + model + config.ModelSetting.Postfix;
-    const std::string param_dir  = config.PathSetting.ParamDir  + model + "/";
-    const std::string target_dir = config.PathSetting.TargetDir + model + "/";
-    const std::string cond_dir   = config.PathSetting.CondDir   + model + "/";
+    const std::string model           = config.ModelSetting.ModelName;
+    const std::string in_path         = config.PathSetting.MeshesDir    + model + config.ModelSetting.Postfix;
+    const std::string param_dir       = config.PathSetting.ParamDir     + model + "/";
+    const std::string morph_init_dir  = config.PathSetting.MorphInitDir + model + "/";
+    const std::string target_dir      = config.PathSetting.TargetDir    + model + "/";
+    const std::string cond_dir        = config.PathSetting.CondDir      + model + "/";
     std::filesystem::create_directories(param_dir);
+    std::filesystem::create_directories(morph_init_dir);
     std::filesystem::create_directories(target_dir);
     std::filesystem::create_directories(cond_dir);
-    spdlog::info("Input     : {}", in_path);
-    spdlog::info("Target out: {}", target_dir);
-    spdlog::info("Param out : {}", param_dir);
-    spdlog::info("Cond out  : {}", cond_dir);
+    spdlog::info("Input         : {}", in_path);
+    spdlog::info("Target out    : {}", target_dir);
+    spdlog::info("Param out     : {}", param_dir);
+    spdlog::info("MorphInit out : {}", morph_init_dir);
+    spdlog::info("Cond out      : {}", cond_dir);
 
     // Read mesh
     Eigen::MatrixXd V;
@@ -113,11 +116,16 @@ int main(int /*argc*/, char* /*argv*/[])
     P_obj.leftCols(2) = P_scaled;
     P_obj.col(2).setZero();
 
-    const std::string v_path  = target_dir + "patch_0_V.obj";
-    const std::string p_path  = param_dir  + "patch_0_P.obj";
-    const std::string sc_path = param_dir  + "global_scale.txt";
-    igl::writeOBJ(v_path, V_scaled, F);
-    igl::writeOBJ(p_path, P_obj,    F);
+    const std::string v_path       = target_dir     + "patch_0_V.obj";
+    const std::string p_path       = param_dir      + "patch_0_P.obj";
+    const std::string p_init_path  = morph_init_dir + "patch_0_P.obj";
+    const std::string sc_path      = param_dir      + "global_scale.txt";
+    igl::writeOBJ(v_path,      V_scaled, F);
+    igl::writeOBJ(p_path,      P_obj,    F);
+    // Seed MorphInitDir with the same initial P.  Inverse will overwrite it
+    // with the OptP-optimized P; this seed lets Forward/S3/S4 run even before
+    // Inverse, treating "no inverse yet" as "manufacture the Param P as-is".
+    igl::writeOBJ(p_init_path, P_obj,    F);
     {
         std::ofstream ofs(sc_path);
         ofs << std::setprecision(17) << scale << "\n";

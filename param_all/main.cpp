@@ -44,18 +44,21 @@ int main(int /*argc*/, char* /*argv*/[])
 
     spdlog::info("Param: start.");
 
-    const std::string model       = config.ModelSetting.ModelName;
-    const std::string patches_dir = config.PathSetting.SegmentDir + model + "/patches/";
-    const std::string param_dir   = config.PathSetting.ParamDir   + model + "/";
-    const std::string target_dir  = config.PathSetting.TargetDir  + model + "/";
-    const std::string cond_dir    = config.PathSetting.CondDir    + model + "/";
+    const std::string model           = config.ModelSetting.ModelName;
+    const std::string patches_dir     = config.PathSetting.SegmentDir   + model + "/patches/";
+    const std::string param_dir       = config.PathSetting.ParamDir     + model + "/";
+    const std::string morph_init_dir  = config.PathSetting.MorphInitDir + model + "/";
+    const std::string target_dir      = config.PathSetting.TargetDir    + model + "/";
+    const std::string cond_dir        = config.PathSetting.CondDir      + model + "/";
     std::filesystem::create_directories(param_dir);
+    std::filesystem::create_directories(morph_init_dir);
     std::filesystem::create_directories(target_dir);
     std::filesystem::create_directories(cond_dir);
-    spdlog::info("Patches dir : {}", patches_dir);
-    spdlog::info("Target out  : {}", target_dir);
-    spdlog::info("Param out   : {}", param_dir);
-    spdlog::info("Cond out    : {}", cond_dir);
+    spdlog::info("Patches dir   : {}", patches_dir);
+    spdlog::info("Target out    : {}", target_dir);
+    spdlog::info("Param out     : {}", param_dir);
+    spdlog::info("MorphInit out : {}", morph_init_dir);
+    spdlog::info("Cond out      : {}", cond_dir);
 
     // ===== Phase 1: read & parameterize each patch =====
     struct PatchData {
@@ -145,12 +148,16 @@ int main(int /*argc*/, char* /*argv*/[])
         P_obj.leftCols(2) = P_scaled;
         P_obj.col(2).setZero();
 
-        const std::string v_path = target_dir + "patch_" + std::to_string(pd.idx) + "_V.obj";
-        const std::string p_path = param_dir  + "patch_" + std::to_string(pd.idx) + "_P.obj";
-        igl::writeOBJ(v_path, V_scaled, pd.F);
-        igl::writeOBJ(p_path, P_obj, pd.F);
+        const std::string v_path      = target_dir     + "patch_" + std::to_string(pd.idx) + "_V.obj";
+        const std::string p_path      = param_dir      + "patch_" + std::to_string(pd.idx) + "_P.obj";
+        const std::string p_init_path = morph_init_dir + "patch_" + std::to_string(pd.idx) + "_P.obj";
+        igl::writeOBJ(v_path,      V_scaled, pd.F);
+        igl::writeOBJ(p_path,      P_obj,    pd.F);
+        // Seed MorphInitDir with the same initial P (InverseAll will overwrite
+        // it per-patch with the OptP-optimized version).
+        igl::writeOBJ(p_init_path, P_obj,    pd.F);
         spdlog::info("Patch {} wrote V -> {}", pd.idx, v_path);
-        spdlog::info("Patch {} wrote P -> {}", pd.idx, p_path);
+        spdlog::info("Patch {} wrote P -> {} (+ seed -> {})", pd.idx, p_path, p_init_path);
 
         // Boundary condition: 3 vertex indices of the center face (on shifted P)
         std::vector<int> centerV = findCenterVertexIndices(P_scaled, pd.F);

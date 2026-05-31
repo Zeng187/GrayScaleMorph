@@ -24,6 +24,7 @@
 #include <cmath>
 #include <numeric>
 #include <filesystem>
+#include <sstream>
 
 #include <spdlog/spdlog.h>
 #include <geometrycentral/surface/manifold_surface_mesh.h>
@@ -55,11 +56,15 @@ int main(int /*argc*/, char * /*argv*/[])
     spdlog::info("Inverse (single mesh): start.");
 
     const std::string model = config.ModelSetting.ModelName;
+    const int patch_id = config.RuntimeSetting.patch_id;
+    const std::string patch_prefix = "patch_" + std::to_string(patch_id) + "_";
+    spdlog::info("Inverse single-mesh: model='{}' patch_id={} (prefix='{}')",
+                 model, patch_id, patch_prefix);
     const std::string target_dir = config.PathSetting.TargetDir + model + "/";
     const std::string param_dir = config.PathSetting.ParamDir + model + "/";
     const std::string cond_dir = config.PathSetting.CondDir + model + "/";
-    const std::string v_path = target_dir + "patch_0_V.obj";
-    const std::string p_path = param_dir + "patch_0_P.obj";
+    const std::string v_path = target_dir + patch_prefix + "V.obj";
+    const std::string p_path = param_dir + patch_prefix + "P.obj";
     const std::string morph_dir = config.PathSetting.MorphDir + model + "/";
     const std::string design_dir = config.PathSetting.DesignDir + model + "/";
     std::filesystem::create_directories(morph_dir);
@@ -110,7 +115,7 @@ int main(int /*argc*/, char * /*argv*/[])
     // Boundary condition: read 3 vertex indices from cond file written by Param
     std::vector<int> fixedVertexIdx;
     {
-        const std::string cond_path = cond_dir + "patch_0_bound_center.txt";
+        const std::string cond_path = cond_dir + patch_prefix + "bound_center.txt";
         std::ifstream ifs(cond_path);
         if (!ifs.is_open())
         {
@@ -128,9 +133,8 @@ int main(int /*argc*/, char * /*argv*/[])
             fixedIdx.push_back(3 * v + k);
     std::sort(fixedIdx.begin(), fixedIdx.end());
 
-    double E = 1.0;
     double nu = 0.5;
-    Morphmesh morph_mesh(V, P, F, E, nu);
+    Morphmesh morph_mesh(V, P, F, 1.0, nu);
     Morphmesh::ComputeMorphophing(geometry, V, F, nV, nF, ref_faces,
                                   MrInv, morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t, morph_mesh.kappa_pv_t, morph_mesh.kappa_pf_t, &morph_mesh.vertex_area_sum);
     Morphmesh::SetMorphophing(morph_mesh.lambda_pv_t, morph_mesh.lambda_pf_t,
@@ -140,7 +144,7 @@ int main(int /*argc*/, char * /*argv*/[])
 
     // Mirror the target into outputs/ so {targ, inv} sit side-by-side for
     // easy comparison.  Content is the same as 2_target/.../patch_0_V.obj.
-    igl::writeOBJ(morph_dir + "patch_0_targ.obj", V, F);
+    igl::writeOBJ(morph_dir + patch_prefix + "targ.obj", V, F);
 
     VertexData<double> lambda_pv_s(mesh, morph_mesh.lambda_pv_s);
     FaceData<double> lambda_pf_s(mesh, morph_mesh.lambda_pf_s);
@@ -149,12 +153,96 @@ int main(int /*argc*/, char * /*argv*/[])
     // V_init: flat plate (P embedded as z=0) rigidly aligned so the 3 fixed
     // vertices sit exactly at their target positions in V.
     Eigen::MatrixXd Vr = flatPlateAligned(P, V, fixedVertexIdx);
-    igl::writeOBJ(morph_dir + "patch_0_init.obj", Vr, F);
+    igl::writeOBJ(morph_dir + patch_prefix + "init.obj", Vr, F);
 
     // Lumped vertex mass vector (size 3*nV); shared by every SGN call so the
     // distance/SPN values reported by main and inside the solver are computed
     // from the exact same weights.
-    const Eigen::VectorXd masses = computeVertexMasses(geometry);
+    //
+    // Source priority:
+    //   1. 1_mass/{model}/patch_{patch_id}_mass.txt  (segmentation-aware per-vertex
+    //      weights produced by 1_post_cut)
+    //   2. Face-area-based fallback via `computeVertexMasses` (legacy default)
+    Eigen::VectorXd masses;
+    {
+        const std::string mass_path = config.PathSetting.MassDir + model + "/"
+                                    + patch_prefix + "mass.txt";
+        masses = loadVertexMassFromFile(mass_path, (int)nV);
+        if(masses.size() == 0)
+        {
+            spdlog::warn("Mass file not found or empty: {}.  Falling back to area-based mass.",
+                         mass_path);
+            masses = computeVertexMasses(geometry);
+        }
+        else
+        {
+            spdlog::info("Loaded segmentation-aware mass from {}", mass_path);
+        }
+    }
+
+    // Per-vertex contact-class labels from 1_post_cut (`patch_X_ncontact.txt`).
+    // Categories:
+    //   class 1 = interior (no adjacent patch)
+    //   class 2 = single-seam boundary
+    //   class 3 = corner (3 patches meet)
+    //   class >= 4 = higher-order junction
+    // Used to split per-vertex RMS into per-class bins.  Missing file -> all
+    // vertices default to class 1 (single bin = total RMS).
+    Eigen::VectorXi vertex_class;
+    {
+        const std::string ncontact_path = config.PathSetting.MassDir + model + "/"
+                                        + patch_prefix + "ncontact.txt";
+        vertex_class = loadVertexClassFromFile(ncontact_path, (int)nV);
+        if(vertex_class.size() == 0)
+        {
+            spdlog::warn("ncontact file missing or empty: {}.  Defaulting all vertices to class 1.",
+                         ncontact_path);
+            vertex_class = Eigen::VectorXi::Ones((int)nV);
+        }
+        else
+        {
+            spdlog::info("Loaded vertex-class labels from {}", ncontact_path);
+        }
+    }
+
+    // Sanity print: average mass per ncontact class.  If 1_mass really hits
+    // SGN (and not the area-based fallback), the per-class averages here
+    // should match the class-wise mean of patch_X_mass.txt up to the
+    // normalisation constant (sum(masses)/3 = 1 over all vertices).
+    {
+        std::array<double, 4> sum_m  = {0.0, 0.0, 0.0, 0.0};
+        std::array<int,    4> cnt_c  = {0,   0,   0,   0};
+        for (int v = 0; v < (int)nV; ++v) {
+            const int c   = vertex_class[v];
+            const int bin = std::min(std::max(c, 1), 4) - 1;
+            // masses entries for v are masses(3v+0..2), all equal by construction.
+            sum_m[bin] += masses(3 * v);
+            cnt_c[bin] += 1;
+        }
+        spdlog::info("Per-class mass check (SGN-side avg)  c1={:.5f}(n={})  c2={:.5f}(n={})  c3={:.5f}(n={})  c4={:.5f}(n={})  total_sum(masses)={:.4f}",
+                     cnt_c[0] > 0 ? sum_m[0] / cnt_c[0] : 0.0, cnt_c[0],
+                     cnt_c[1] > 0 ? sum_m[1] / cnt_c[1] : 0.0, cnt_c[1],
+                     cnt_c[2] > 0 ? sum_m[2] / cnt_c[2] : 0.0, cnt_c[2],
+                     cnt_c[3] > 0 ? sum_m[3] / cnt_c[3] : 0.0, cnt_c[3],
+                     masses.sum());
+    }
+
+    // Mass vector for OptP SGN calls.  When `optp_uniform_mass=true`, OptP
+    // sees a uniform mass so the P-layout update is not driven by the
+    // per-vertex mass discontinuity at seams (which otherwise propagates
+    // straight into ΔP and produces zigzag P along the seam).  OptKap /
+    // OptLam still use the segmentation-aware `masses`.
+    Eigen::VectorXd masses_optp;
+    if (config.RuntimeSetting.optp_uniform_mass)
+    {
+        masses_optp = Eigen::VectorXd::Constant(3 * (int)nV, 1.0 / (double)nV);
+        spdlog::info("OptP will use uniform mass (1/{}) so P-layout is decoupled from segmentation-aware mass.",
+                     nV);
+    }
+    else
+    {
+        masses_optp = masses;
+    }
 
     // Face-space matrices used to build the *other-variable* regulariser as a
     // constant offset, so the SPN energy printed by the OptKap/OptLam stages
@@ -223,6 +311,17 @@ int main(int /*argc*/, char * /*argv*/[])
     double wL_kap = config.RuntimeSetting.wL_kap;
     double wL_lam = config.RuntimeSetting.wL_lam;
 
+    // SLIM barrier homotopy: start at `wSLIM` (large enough to keep P away
+    // from sliver/foldover), decay by `wSLIM_decay` at every stage end, and
+    // switch to `wSLIM_final` during the FinalSnap pass.  Matches barrier /
+    // interior-point continuation: strong barrier early to avoid bad P
+    // geometry, then weaker barrier to let dist drive convergence.
+    double wSLIM        = config.RuntimeSetting.wSLIM;
+    const double wSLIM_decay = config.RuntimeSetting.wSLIM_decay;
+    const double wSLIM_final = config.RuntimeSetting.wSLIM_final;
+    spdlog::info("wSLIM homotopy: start={:.3e} decay={:.3f} final={:.3e}",
+                 wSLIM, wSLIM_decay, wSLIM_final);
+
     double distance = 0.0;
     double spn_energy = 0.0;
     double penalty_kap = 0.0;
@@ -288,7 +387,7 @@ int main(int /*argc*/, char * /*argv*/[])
         // bd/int RMS would not track the actual SGN progress.
         FaceData<Eigen::Matrix2d> MrInv_curr = precomputeMrInv(mesh, P, F);
         auto simFunc_proj = simulationFunction(geometry, MrInv_curr, lambda_pf_proj, kappa_pf_proj,
-                                               E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+                                               ac.m_E_surface, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         Eigen::MatrixXd Vr_proj = Vr_start;
         newton(geometry, Vr_proj, simFunc_proj,
                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
@@ -306,26 +405,87 @@ int main(int /*argc*/, char * /*argv*/[])
     };
     auto computeProjectedDistance = [&]() { return computeProjectedDistanceFrom(Vr); };
 
-    // Per-vertex Euclidean RMS distance, separated by boundary / interior.
-    // Returned as a pair (bd_rms, int_rms) in physical units.  Unlike the
-    // mass-weighted `dist` field this is the raw uniform-averaged RMS, so
-    // it has direct geometric meaning ("the average vertex is X mm off
-    // target").  bd_rms typically dominates because boundary vertices have
-    // fewer geometric constraints than interior ones.
+    // P-mesh quality: (min_angle_deg, max_aspect_ratio).  aspect_ratio =
+    // longest_edge / shortest_edge.  Used for stage-end diagnostics.
+    auto computePQuality = [&](const Eigen::MatrixXd& P_cur) -> std::pair<double, double> {
+        double min_angle_rad = M_PI;
+        double max_aspect    = 1.0;
+        for (int fi = 0; fi < F.rows(); ++fi) {
+            const Eigen::Vector2d p0 = P_cur.row(F(fi, 0));
+            const Eigen::Vector2d p1 = P_cur.row(F(fi, 1));
+            const Eigen::Vector2d p2 = P_cur.row(F(fi, 2));
+            const Eigen::Vector2d e01 = p1 - p0;
+            const Eigen::Vector2d e12 = p2 - p1;
+            const Eigen::Vector2d e02 = p2 - p0;
+            const double l0 = e01.norm(), l1 = e12.norm(), l2 = e02.norm();
+            if (l0 < 1e-12 || l1 < 1e-12 || l2 < 1e-12) continue;
+            const double two_area = std::abs(e01.x() * e02.y() - e01.y() * e02.x());
+            const double sin0 = std::min(1.0, two_area / (l0 * l2));
+            const double sin1 = std::min(1.0, two_area / (l0 * l1));
+            const double sin2 = std::min(1.0, two_area / (l2 * l1));
+            const double a0 = std::asin(sin0), a1 = std::asin(sin1), a2 = std::asin(sin2);
+            min_angle_rad = std::min({min_angle_rad, a0, a1, a2});
+            const double l_max = std::max({l0, l1, l2});
+            const double l_min = std::min({l0, l1, l2});
+            max_aspect = std::max(max_aspect, l_max / l_min);
+        }
+        return {min_angle_rad * 180.0 / M_PI, max_aspect};
+    };
+
+    // Per-vertex Euclidean RMS distance, binned by ncontact class.
+    // Returns 4 values in physical units:
+    //   [0] class_1_rms  (interior, ncontact == 1)
+    //   [1] class_2_rms  (single-seam boundary, ncontact == 2)
+    //   [2] class_3_rms  (corner, ncontact == 3)
+    //   [3] class_4_rms  (junction, ncontact >= 4)
+    // Empty bin -> 0.0.  Unlike the mass-weighted `dist` this is the raw
+    // uniform-averaged RMS, so it has direct geometric meaning ("the average
+    // class-X vertex is r mm off target").
+    // For each ncontact class we report mean, max and RMS of the per-vertex
+    // Euclidean distance ‖V-V_T‖ (mm).
+    struct ClassErr { std::array<double, 4> mean{}, max{}, rms{}; };
     geometry.requireVertexIndices();
-    auto computeBoundaryInteriorRMS = [&](const Eigen::MatrixXd& V_cur) -> std::pair<double, double> {
-        double bd_sum2 = 0.0, int_sum2 = 0.0;
-        int    bd_cnt  = 0,   int_cnt  = 0;
+    auto computeClassRMS = [&](const Eigen::MatrixXd& V_cur) -> ClassErr {
+        std::array<double, 4> sum1 = {0.0, 0.0, 0.0, 0.0};
+        std::array<double, 4> sum2 = {0.0, 0.0, 0.0, 0.0};
+        std::array<double, 4> mx   = {0.0, 0.0, 0.0, 0.0};
+        std::array<int,    4> cnt  = {0,   0,   0,   0};
         for (Vertex v : mesh.vertices()) {
             const int vi = static_cast<int>(geometry.vertexIndices[v]);
-            const Eigen::Vector3d d = V_cur.row(vi) - targetV.row(vi);
-            const double d2 = d.squaredNorm();
-            if (v.isBoundary()) { bd_sum2 += d2; ++bd_cnt; }
-            else                { int_sum2 += d2; ++int_cnt; }
+            const int c  = vertex_class[vi];
+            const int bin = std::min(std::max(c, 1), 4) - 1;   // 1->0, 2->1, 3->2, >=4->3
+            const double dn = (V_cur.row(vi) - targetV.row(vi)).norm();
+            sum1[bin] += dn;
+            sum2[bin] += dn * dn;
+            mx[bin]    = std::max(mx[bin], dn);
+            cnt[bin]  += 1;
         }
-        const double bd_rms  = bd_cnt  > 0 ? std::sqrt(bd_sum2 / bd_cnt)   : 0.0;
-        const double int_rms = int_cnt > 0 ? std::sqrt(int_sum2 / int_cnt) : 0.0;
-        return { bd_rms, int_rms };
+        ClassErr e;
+        for (int b = 0; b < 4; ++b) {
+            e.mean[b] = (cnt[b] > 0) ? sum1[b] / cnt[b]          : 0.0;
+            e.rms[b]  = (cnt[b] > 0) ? std::sqrt(sum2[b] / cnt[b]) : 0.0;
+            e.max[b]  = mx[b];
+        }
+        return e;
+    };
+    // Compact human string for console / spdlog.
+    auto clsStr = [](const ClassErr& e) -> std::string {
+        std::ostringstream os; os.setf(std::ios::fixed); os.precision(6);
+        for (int i = 0; i < 4; ++i) {
+            if (i) os << ' ';
+            os << "c" << (i + 1) << "(mean=" << e.mean[i]
+               << " max=" << e.max[i] << " rms=" << e.rms[i] << ")";
+        }
+        return os.str();
+    };
+    // 12 CSV fields (no surrounding commas): mean,max,rms per class 1..4.
+    auto clsCsv = [](const ClassErr& e) -> std::string {
+        std::ostringstream os; os.setf(std::ios::fixed); os.precision(6);
+        for (int i = 0; i < 4; ++i) {
+            if (i) os << ',';
+            os << e.mean[i] << ',' << e.max[i] << ',' << e.rms[i];
+        }
+        return os.str();
     };
 
     // Re-run forward Newton on the current (P, lambda, kappa) state and
@@ -335,7 +495,7 @@ int main(int /*argc*/, char * /*argv*/[])
     auto recomputeForwardState = [&]() -> double
     {
         auto simFunc = simulationFunction(geometry, MrInv, lambda_pf_s, kappa_pf_s,
-                                          E, nu, ac.thickness,
+                                          ac.m_E_surface, nu, ac.thickness,
                                           config.RuntimeSetting.w_s,
                                           config.RuntimeSetting.w_b, ref_faces);
         newton(geometry, Vr, simFunc,
@@ -355,14 +515,13 @@ int main(int /*argc*/, char * /*argv*/[])
     auto printStageStats = [&]()
     {
         const auto _proj_st = computeProjStateFrom(Vr);
-        const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
+        const auto cls_rms = computeClassRMS(_proj_st.V);
         penalty_kap = compute_candidate_diff(ac.feasible_kapp, kappa_pf_s.toVector(), true);
         penalty_lam = compute_candidate_diff(ac.feasible_lamb, lambda_pf_s.toVector(), true);
         std::cout << "SPN energy: " << spn_energy
                   << ", Distance: " << distance
                   << ", Projected distance: " << _proj_st.dist
-                  << ", bd_rms: " << bd_rms
-                  << ", int_rms: " << int_rms
+                  << ", " << clsStr(cls_rms)
                   << ", Penalty_kap: " << penalty_kap
                   << ", Penalty_lam: " << penalty_lam
                   << "\n";
@@ -404,7 +563,8 @@ int main(int /*argc*/, char * /*argv*/[])
     iter_log_ofs << "stage,substage,iter,spn,dist,proj_dist,"
                  << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
                  << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam,"
-                 << "bd_rms,int_rms\n";
+                 << "class_1_mean,class_1_max,class_1_rms,class_2_mean,class_2_max,class_2_rms,"
+                    "class_3_mean,class_3_max,class_3_rms,class_4_mean,class_4_max,class_4_rms,wSLIM\n";
     spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
 
     // Helper to reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
@@ -431,30 +591,30 @@ int main(int /*argc*/, char * /*argv*/[])
 
         printf("----------------------------  OptKap Start ----------------------------\n", k);
 
-        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        auto adjointFunc_OptKap = adjointFunction_FixLam_OptKap(geometry, F, MrInv, lambda_pf_s, ac.m_E_surface, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         // OptKap: self_reg = kappa_reg (dynamic), lambda_reg is the constant other_reg.
         auto logger_OptKap = [&](int i, const Eigen::VectorXd& x_iter,
                                  double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
             const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
             const double pd      = _proj_st.dist;
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
+            const auto cls_rms = computeClassRMS(_proj_st.V);
             // Always log BOTH penalties (full kappa-side and lambda-side
             // distance to the 1D feasible set at the current theta).
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-            std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
+            std::cout << "\tproj=" << pd << "\t" << clsStr(cls_rms) << std::endl;
             iter_log_ofs << k << ",OptKap," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << self_reg_iter << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                                                        wM_kap, wL_kap, kappa_anchor, wP_kap,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                                                       ac.m_E_surface, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptKap);
         kappa_reg = self_reg; // sync for the next OptLam call
@@ -462,16 +622,16 @@ int main(int /*argc*/, char * /*argv*/[])
         const double proj_after_kap = computeProjectedDistance();
         {
             const auto _proj_st_end = computeProjStateFrom(Vr);
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
+            const auto cls_rms = computeClassRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-            spdlog::info("Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
-                         k, spn_energy, distance, proj_after_kap, bd_rms, int_rms, pen_kap, pen_lam);
+            spdlog::info("Stage {} [OptKap finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} {} Pkap={:.6f} Plam={:.6f}",
+                         k, spn_energy, distance, proj_after_kap, clsStr(cls_rms), pen_kap, pen_lam);
             iter_log_ofs << k << ",OptKap,-1," << spn_energy << "," << distance << "," << proj_after_kap << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
         }
 
         printStageStats();
@@ -479,28 +639,28 @@ int main(int /*argc*/, char * /*argv*/[])
         printf("----------------------------  OptKap Finish ----------------------------\n", k);
 
         printf("----------------------------  OptLam Start ----------------------------\n", k);
-        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        auto adjointFunc_OptLam = adjointFunction_FixKap_OptLam2(geometry, F, MrInv, kappa_pf_s, ac.m_E_surface, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
         // OptLam: self_reg = lambda_reg (dynamic), kappa_reg is the constant other_reg.
         auto logger_OptLam = [&](int i, const Eigen::VectorXd& x_iter,
                                  double spn, double dist, double self_reg_iter, double /*penalty_iter*/) {
             const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
             const double pd      = _proj_st.dist;
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
+            const auto cls_rms = computeClassRMS(_proj_st.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-            std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
+            std::cout << "\tproj=" << pd << "\t" << clsStr(cls_rms) << std::endl;
             iter_log_ofs << k << ",OptLam," << i << ","
                          << spn << "," << dist << "," << pd << ","
                          << kappa_reg << "," << self_reg_iter << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
                                                        config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                                                        wM_lam, wL_lam, lambda_anchor, wP_lam,
-                                                       E, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                                                       ac.m_E_surface, nu, ac.thickness, config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                                                        distance, spn_energy, self_reg,
                                                        logger_OptLam);
         lambda_reg = self_reg; // sync for the next OptKap call
@@ -508,16 +668,16 @@ int main(int /*argc*/, char * /*argv*/[])
         const double proj_after_lam = computeProjectedDistance();
         {
             const auto _proj_st_end = computeProjStateFrom(Vr);
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
+            const auto cls_rms = computeClassRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-            spdlog::info("Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f} Pkap={:.6f} Plam={:.6f}",
-                         k, spn_energy, distance, proj_after_lam, bd_rms, int_rms, pen_kap, pen_lam);
+            spdlog::info("Stage {} [OptLam finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} {} Pkap={:.6f} Plam={:.6f}",
+                         k, spn_energy, distance, proj_after_lam, clsStr(cls_rms), pen_kap, pen_lam);
             iter_log_ofs << k << ",OptLam,-1," << spn_energy << "," << distance << "," << proj_after_lam << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
         }
 
         printStageStats();
@@ -553,13 +713,18 @@ int main(int /*argc*/, char * /*argv*/[])
         // After the loop exits + best snapshot is restored, a single extra
         // SGN OptP on SNAPPED material is run (outside this loop) to refine
         // P against the actually-manufactured discrete design.
+        if (!config.RuntimeSetting.run_stage_optp) {
+            spdlog::info("Stage {} run_stage_optp=false: skipping per-stage OptP; P stays unchanged.", k);
+        }
+        else
+        {
         printf("----------------------------  OptP Start ------------------------------\n");
         {
             auto adjointFunc_OptP = adjointFunction_FixMaterial_OptP(
                 geometry, F, lambda_pf_s, kappa_pf_s, MrInv_anchor,
-                E, nu, ac.thickness,
+                ac.m_E_surface, nu, ac.thickness,
                 config.RuntimeSetting.w_s, config.RuntimeSetting.w_b,
-                config.RuntimeSetting.wSLIM, ref_faces);
+                wSLIM, ref_faces);
 
             const double wM_P = config.RuntimeSetting.wM_P;
             const double wL_P = config.RuntimeSetting.wL_P;
@@ -572,28 +737,29 @@ int main(int /*argc*/, char * /*argv*/[])
                 // distance (consistent with OptKap / OptLam loggers).
                 const auto _proj_st = computeProjStateFrom(reshape_x_to_V(x_iter));
                 const double pd      = _proj_st.dist;
-                const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st.V);
+                const auto cls_rms = computeClassRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-                std::cout << "\tproj=" << pd << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
+                std::cout << "\tproj=" << pd << "\t" << clsStr(cls_rms) << std::endl;
                 iter_log_ofs << k << ",OptP," << i << ","
                              << spn << "," << dist << "," << pd << ","
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
             };
 
             double P_reg = 0.0;
             Vr = sparse_gauss_newton_FixMaterial_OptP(
                 geometry, F, targetV, Vr, P,
                 lambda_pf_s, kappa_pf_s,               // continuous material
-                masses, M_P_2, L_P_2, P_anchor,
+                masses_optp, M_P_2, L_P_2, P_anchor,   // uniform mass if cfg.optp_uniform_mass
                 kappa_reg + lambda_reg,                // other_reg
                 adjointFunc_OptP, fixedIdx,
                 config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
                 wM_P, wL_P,
-                E, nu, ac.thickness,
+                config.RuntimeSetting.min_angle_deg,
+                ac.m_E_surface, nu, ac.thickness,
                 config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
                 distance, spn_energy, P_reg,
                 logger_OptP);
@@ -609,23 +775,25 @@ int main(int /*argc*/, char * /*argv*/[])
             Eigen::MatrixXd P_obj(P.rows(), 3);
             P_obj.leftCols(2) = P;
             P_obj.col(2).setZero();
-            igl::writeOBJ(morph_dir + "patch_0_P_stage" + std::to_string(k) + ".obj", P_obj, F);
+            igl::writeOBJ(morph_dir + patch_prefix + "P_stage" + std::to_string(k) + ".obj", P_obj, F);
 
             std::cout << "[OptP finish] stage " << k << "  ";
             printStageStats();
             const double pd_optp = computeProjectedDistance();
             const auto _proj_st_end = computeProjStateFrom(Vr);
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_proj_st_end.V);
+            const auto cls_rms = computeClassRMS(_proj_st_end.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
-            spdlog::info("Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} bd_rms={:.6f} int_rms={:.6f}",
-                         k, spn_energy, distance, pd_optp, bd_rms, int_rms);
+            const auto [_q_minang, _q_maxasp] = computePQuality(P);
+            spdlog::info("Stage {} [OptP   finish] SPN={:.6f} Dist={:.6f} ProjDist={:.6f} {} wSLIM={:.3e}  P-quality: min_angle={:.2f} deg  max_aspect={:.2f}",
+                         k, spn_energy, distance, pd_optp, clsStr(cls_rms), wSLIM, _q_minang, _q_maxasp);
             iter_log_ofs << k << ",OptP,-1," << spn_energy << "," << distance << "," << pd_optp << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
         }
+        }   // end if (run_stage_optp)
         // -------------------------------------------------------------------
 
         // ---- Trust-region safeguard: accept / reject this stage -----------
@@ -714,6 +882,11 @@ int main(int /*argc*/, char * /*argv*/[])
         wM_lam *= 0.5;
         wL_lam *= 0.5;
 
+        // SLIM barrier homotopy: weaken the barrier after each stage so the
+        // dist term gradually takes over.  Floor at 1e-12 to avoid underflow.
+        wSLIM = std::max(wSLIM * wSLIM_decay, 1e-12);
+        spdlog::info("Stage {} end: wSLIM -> {:.3e}", k, wSLIM);
+
         // Recompute reg accumulators after weight decay so the next stage's
         // SPN energy formula uses the *new* weights consistently for both
         // kappa_reg and lambda_reg.  Also picks up the refreshed M_kappa
@@ -753,9 +926,9 @@ int main(int /*argc*/, char * /*argv*/[])
         }
         auto adjointFunc_OptP_snap = adjointFunction_FixMaterial_OptP(
             geometry, F, lambda_pf_snap, kappa_pf_snap, MrInv_anchor,
-            E, nu, ac.thickness,
+            ac.m_E_surface, nu, ac.thickness,
             config.RuntimeSetting.w_s, config.RuntimeSetting.w_b,
-            config.RuntimeSetting.wSLIM, ref_faces);
+            wSLIM_final, ref_faces);
 
         auto logger_OptP_snap = [&](int i, const Eigen::VectorXd& x_iter,
                                     double spn, double dist, double, double) {
@@ -763,43 +936,51 @@ int main(int /*argc*/, char * /*argv*/[])
             // dist itself IS the projected distance (snap-equilibrium V_r
             // vs V_T).  Still log the current values of penalty / weights
             // so the CSV row never contains placeholder zeros.
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(reshape_x_to_V(x_iter));
+            const auto cls_rms = computeClassRMS(reshape_x_to_V(x_iter));
             // FinalSnap uses snap material inside SGN, so report penalty
             // against the same snap (κ, λ) — by construction ~= 0.
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
-            std::cout << "\tdist=" << dist << "\tbd=" << bd_rms << "\tint=" << int_rms << std::endl;
+            std::cout << "\tdist=" << dist << "\t" << clsStr(cls_rms) << std::endl;
             iter_log_ofs << "-1,FinalSnapOptP," << i << ","
                          << spn << "," << dist << "," << dist << ","
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << bd_rms << "," << int_rms << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM_final << "\n";
         };
 
         double dummy_dist = 0, dummy_spn = 0, dummy_reg = 0;
-        Vr = sparse_gauss_newton_FixMaterial_OptP(
-            geometry, F, targetV, Vr, P,
-            lambda_pf_snap, kappa_pf_snap,
-            masses, M_P_2, L_P_2, P_anchor,
-            0.0,                                   // other_reg = 0 for final snap pass
-            adjointFunc_OptP_snap, fixedIdx,
-            config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
-            config.RuntimeSetting.wM_P, config.RuntimeSetting.wL_P,
-            E, nu, ac.thickness,
-            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
-            dummy_dist, dummy_spn, dummy_reg,
-            logger_OptP_snap);
-        // Refresh MrInv with the final P; (lambda_pf_s, kappa_pf_s) stay
-        // continuous - the snap is only used inside the OptP.
-        MrInv = precomputeMrInv(mesh, P, F);
+        if (config.RuntimeSetting.run_final_optp)
+        {
+            Vr = sparse_gauss_newton_FixMaterial_OptP(
+                geometry, F, targetV, Vr, P,
+                lambda_pf_snap, kappa_pf_snap,
+                masses_optp, M_P_2, L_P_2, P_anchor,   // uniform mass if cfg.optp_uniform_mass
+                0.0,                                   // other_reg = 0 for final snap pass
+                adjointFunc_OptP_snap, fixedIdx,
+                config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon,
+                config.RuntimeSetting.wM_P, config.RuntimeSetting.wL_P,
+                config.RuntimeSetting.min_angle_deg,
+                ac.m_E_surface, nu, ac.thickness,
+                config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces,
+                dummy_dist, dummy_spn, dummy_reg,
+                logger_OptP_snap);
+            // Refresh MrInv with the final P; (lambda_pf_s, kappa_pf_s) stay
+            // continuous - the snap is only used inside the OptP.
+            MrInv = precomputeMrInv(mesh, P, F);
+        }
+        else
+        {
+            spdlog::info("run_final_optp=false: skipping SGN OptP after snap; P stays at the best snapshot.");
+        }
 
         // Ensure the CSV always carries a FinalSnapOptP summary row even when
         // SGN exited on the very first inner iter via line-search failure
         // (the per-iter logger only fires after a successful step).
         {
             const auto _st = computeProjStateFrom(Vr);
-            const auto [bd_rms, int_rms] = computeBoundaryInteriorRMS(_st.V);
+            const auto cls_rms = computeClassRMS(_st.V);
             const double pen_kap = penalty_to_kapp.eval(kappa_pf_snap.toVector());
             const double pen_lam = penalty_to_lamb.eval(lambda_pf_snap.toVector());
             iter_log_ofs << "-1,FinalSnapOptP,-1,"
@@ -808,14 +989,30 @@ int main(int /*argc*/, char * /*argv*/[])
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
                          << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
-                         << bd_rms << "," << int_rms << "\n";
+                         << clsCsv(cls_rms) << "," << wSLIM_final << "\n";
         }
         std::cout << "[Final SNAP OptP done] dist=" << dummy_dist << "\n";
     }
 
     // V_target was already in physical (device) units; Vr lives in the same
     // frame, so write it out as-is — no inverse rescaling.
-    igl::writeOBJ(morph_dir + "patch_0_inv.obj", Vr, F);
+    igl::writeOBJ(morph_dir + patch_prefix + "inv.obj", Vr, F);
+
+    // ---- Persist OptP-optimized P to MorphInitDir for downstream consumers
+    // (Forward, S3_Simulate, S4_Slice, MorphoShell).  ParamDir holds the
+    // INITIAL P from Param; MorphInitDir holds the FINAL P after the SNAP
+    // OptP pass converged.  Forward prefers MorphInitDir, falls back to
+    // ParamDir if Inverse has not been run on this model yet.
+    {
+        const std::string morph_init_dir = config.PathSetting.MorphInitDir + model + "/";
+        std::filesystem::create_directories(morph_init_dir);
+        const std::string p_out_path = morph_init_dir + patch_prefix + "P.obj";
+        Eigen::MatrixXd P_obj_final(P.rows(), 3);
+        P_obj_final.leftCols(2) = P;
+        P_obj_final.col(2).setZero();
+        igl::writeOBJ(p_out_path, P_obj_final, F);
+        spdlog::info("Final P -> {}", p_out_path);
+    }
 
     // ---- Final projected forward sim (manufacturing reality) ----------------
     // Snap (lambda, kappa) per face to the nearest feasible (t1, t2) pair,
@@ -824,8 +1021,7 @@ int main(int /*argc*/, char * /*argv*/[])
     // actually produce.  Also report the final manufacturing distance
     // prominently in the log.
     double final_proj_dist = 0.0;
-    double final_bd_rms = 0.0;
-    double final_int_rms = 0.0;
+    ClassErr final_cls_rms;
     {
         FaceData<double> kappa_pf_proj(mesh);
         FaceData<double> lambda_pf_proj(mesh);
@@ -837,7 +1033,7 @@ int main(int /*argc*/, char * /*argv*/[])
             lambda_pf_proj[f] = ac.feasible_lamb[idx];
         }
         auto simFunc_proj = simulationFunction(geometry, MrInv, lambda_pf_proj, kappa_pf_proj,
-                                               E, nu, ac.thickness,
+                                               ac.m_E_surface, nu, ac.thickness,
                                                config.RuntimeSetting.w_s,
                                                config.RuntimeSetting.w_b, ref_faces);
         Eigen::MatrixXd Vr_proj = Vr;
@@ -851,12 +1047,10 @@ int main(int /*argc*/, char * /*argv*/[])
                 final_proj_dist += masses(3 * i + j) * d * d;
             }
 
-        // bd / int RMS computed on the actually-manufactured proj mesh.
-        auto [_bd, _int] = computeBoundaryInteriorRMS(Vr_proj);
-        final_bd_rms  = _bd;
-        final_int_rms = _int;
+        // Per-class RMS computed on the actually-manufactured proj mesh.
+        final_cls_rms = computeClassRMS(Vr_proj);
 
-        const std::string proj_path = morph_dir + "patch_0_proj.obj";
+        const std::string proj_path = morph_dir + patch_prefix + "proj.obj";
         igl::writeOBJ(proj_path, Vr_proj, F);
         spdlog::info("Proj mesh -> {}", proj_path);
     }
@@ -866,8 +1060,8 @@ int main(int /*argc*/, char * /*argv*/[])
     //   patch_0_material.txt  : face_id  t1  t2           (discrete grayscale doses)
     //   patch_0_lamkap.txt    : face_id  lambda  kappa    (continuous SGN values)
     {
-        const std::string mat_path = design_dir + "patch_0_material.txt";
-        const std::string lk_path = design_dir + "patch_0_lamkap.txt";
+        const std::string mat_path = design_dir + patch_prefix + "material.txt";
+        const std::string lk_path = design_dir + patch_prefix + "lamkap.txt";
         std::ofstream mof(mat_path);
         std::ofstream lof(lk_path);
         mof << "# face_id  t1  t2\n";
@@ -891,8 +1085,7 @@ int main(int /*argc*/, char * /*argv*/[])
     std::cout << "==========================================================\n";
     std::cout << "  FINAL Projected distance (manufactured design):  "
               << final_proj_dist << "\n";
-    std::cout << "  Per-vertex RMS (Euclidean, mm)  bd = " << final_bd_rms
-              << "   int = " << final_int_rms << "\n";
+    std::cout << "  Per-vertex error (Euclidean, mm)  " << clsStr(final_cls_rms) << "\n";
     std::cout << "==========================================================\n";
     std::cout << "\n";
 

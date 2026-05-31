@@ -48,11 +48,14 @@ Config::Config(const std::string& filePath) {
     PathSetting.InitialDir    = p["InitialDir"][0];
     PathSetting.MaterialsDir  = p["MaterialsDir"][0];
     PathSetting.SegmentDir    = p["SegmentDir"][0];
+    // MassDir: optional (back-compat) — per-vertex mass weights from 1_post_cut.
+    PathSetting.MassDir       = p.value("MassDir", nlohmann::json::array({"../../Resources/1_mass/"}))[0];
     PathSetting.DesignDir     = p["DesignDir"][0];
     PathSetting.TargetDir     = p["TargetDir"][0];
     PathSetting.MorphDir      = p["MorphDir"][0];
     PathSetting.MorphLogsDir  = p.value("MorphLogsDir", nlohmann::json::array({"../../Resources/2_morphlogs/"}))[0];
     PathSetting.ParamDir      = p["ParamDir"][0];
+    PathSetting.MorphInitDir  = p["MorphInitDir"][0];
     PathSetting.CondDir       = p["CondDir"][0];
     PathSetting.ForwardDir    = p["ForwardDir"][0];
     PathSetting.FigsDir       = p["FigsDir"][0];
@@ -96,6 +99,36 @@ Config::Config(const std::string& filePath) {
     RuntimeSetting.wM_P  = rt.value("wM_P",  nlohmann::json::array({1e-4}))[0];
     RuntimeSetting.wL_P  = rt.value("wL_P",  nlohmann::json::array({1e-3}))[0];
     RuntimeSetting.wSLIM = rt.value("wSLIM", nlohmann::json::array({0.0}))[0];
+    // wSLIM_decay defaults to 1.0 (no decay -> back-compat with old cfgs).
+    RuntimeSetting.wSLIM_decay = rt.value("wSLIM_decay", nlohmann::json::array({1.0}))[0];
+    // wSLIM_final defaults to the initial wSLIM (back-compat).
+    RuntimeSetting.wSLIM_final = rt.value("wSLIM_final",
+                                          nlohmann::json::array({RuntimeSetting.wSLIM}))[0];
+    // run_stage_optp defaults to true (current behaviour).  Set false to skip
+    // the per-stage SGN OptP inside the BCD loop -- P stays at P_anchor for
+    // the entire BCD pass; only (kappa, lambda) are updated.  Useful to test
+    // whether the OptP step is responsible for seam-quality issues.
+    RuntimeSetting.run_stage_optp = rt.value("run_stage_optp",
+                                             nlohmann::json::array({true}))[0];
+    // run_final_optp defaults to true (current behaviour).  Set false to skip
+    // the post-BCD SGN OptP pass on snapped material (P freezes at the best
+    // snapshot from the BCD loop).
+    RuntimeSetting.run_final_optp = rt.value("run_final_optp",
+                                             nlohmann::json::array({true}))[0];
+    // optp_uniform_mass defaults to false (back-compat).  When true, every OptP
+    // SGN call (both per-stage and FinalSnap) uses a uniform per-vertex mass
+    // (1/nV broadcast across xyz), so P-layout updates are not driven by the
+    // segmentation-aware mass discontinuity at seams.  OptKap / OptLam still
+    // use the segmentation-aware `masses`.
+    RuntimeSetting.optp_uniform_mass = rt.value("optp_uniform_mass",
+                                                nlohmann::json::array({false}))[0];
+    // min_angle_deg defaults to 0 (disabled) for back-compat.  A typical value
+    // is 5-10 degrees; trial P that creates a thinner face is rejected by the
+    // line search via +inf return from the SGN OptP `distance` lambda.
+    RuntimeSetting.min_angle_deg = rt.value("min_angle_deg",
+                                            nlohmann::json::array({0.0}))[0];
+    // patch_id defaults to 0 (back-compat with single-patch single-mesh runs).
+    RuntimeSetting.patch_id    = rt.value("patch_id", nlohmann::json::array({0}))[0];
     RuntimeSetting.penalty_threshold  = rt["penalty_threshold"][0];
     RuntimeSetting.betaP              = rt["betaP"][0];
     RuntimeSetting.snap_before_P      = rt.value("snap_before_P",    nlohmann::json::array({false}))[0];

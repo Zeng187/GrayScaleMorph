@@ -13,6 +13,24 @@
 /// geometry must own a mesh; requireFaceAreas / requireVertexIndices are called.
 Eigen::VectorXd computeVertexMasses(geometrycentral::surface::IntrinsicGeometryInterface& geometry);
 
+/// Load per-vertex mass weights from a text file (one `idx value` per line)
+/// produced by the 1_post_cut module under Resources/1_mass/{model}/.  The
+/// returned vector is sized 3 * nV with the per-vertex value broadcast across
+/// the xyz triple, matching the convention of `computeVertexMasses`.  The
+/// weights are normalised so they sum to 1 (over the 3nV vector, matching
+/// `computeVertexMasses`'s totalArea normalisation).
+/// Returns an empty VectorXd if the file is missing or unreadable; callers
+/// should fall back to `computeVertexMasses(geometry)`.
+Eigen::VectorXd loadVertexMassFromFile(const std::string& path, int nV);
+
+/// Load per-vertex contact-class labels (`patch_X_ncontact.txt`) produced by
+/// the 1_post_cut module.  File format: one `idx class` per line, `class` is
+/// a positive integer indicating how many adjacent patches this vertex
+/// touches (1 = interior, 2 = single-seam boundary, 3 = corner, 4+ = junction).
+/// Returns an empty VectorXi if the file is missing or empty; callers should
+/// fall back to treating all vertices as class 1.
+Eigen::VectorXi loadVertexClassFromFile(const std::string& path, int nV);
+
 /// Per-face diagonal mass matrix used by the kappa regulariser (OptKap).
 /// Entry i = 0.5 / det(MrInv[f_i]).
 Eigen::SparseMatrix<double>

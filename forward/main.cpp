@@ -2,7 +2,7 @@
 //
 // Reads (single-mesh / patch_0):
 //   PathSetting.TargetDir + {model}/patch_0_V.obj             (target V — used as Newton init)
-//   PathSetting.ParamDir  + {model}/patch_0_P.obj             (scaled + gauge-shifted P)
+//   PathSetting.MorphInitDir + {model}/patch_0_P.obj          (OptP-optimized P from Inverse)
 //   PathSetting.CondDir   + {model}/patch_0_bound_center.txt  (3 vertex idx — rigid anchor)
 //   PathSetting.DesignDir + {model}/patch_0_material.txt      (per-face t1, t2)
 //
@@ -47,12 +47,12 @@ int main(int /*argc*/, char* /*argv*/[])
 
     spdlog::info("Forward (single mesh): start.");
 
-    const std::string model      = config.ModelSetting.ModelName;
-    const std::string target_dir = config.PathSetting.TargetDir  + model + "/";
-    const std::string param_dir  = config.PathSetting.ParamDir   + model + "/";
-    const std::string cond_dir   = config.PathSetting.CondDir    + model + "/";
-    const std::string design_dir = config.PathSetting.DesignDir  + model + "/";
-    const std::string pred_dir   = config.PathSetting.ForwardDir + model + "/";
+    const std::string model           = config.ModelSetting.ModelName;
+    const std::string target_dir      = config.PathSetting.TargetDir     + model + "/";
+    const std::string morph_init_dir  = config.PathSetting.MorphInitDir  + model + "/";
+    const std::string cond_dir        = config.PathSetting.CondDir       + model + "/";
+    const std::string design_dir      = config.PathSetting.DesignDir     + model + "/";
+    const std::string pred_dir        = config.PathSetting.ForwardDir    + model + "/";
     std::filesystem::create_directories(pred_dir);
 
     // -------- Load V (physical-unit target, also used as Newton init) --------
@@ -68,13 +68,19 @@ int main(int /*argc*/, char* /*argv*/[])
     spdlog::info("V: {} V, {} F (from {}).", nV, nF, v_path);
 
     // -------- Load P --------
+    // Forward MUST use the OptP-optimized P from Inverse (MorphInitDir), not
+    // the initial Param P.  Using Param P silently would produce a "valid-looking"
+    // verification that disagrees with the actual inverse design — same hazard
+    // as S3_Simulate / S4_Slice.  Hard error if MorphInitDir copy is missing.
     Eigen::MatrixXd P_loaded3;
     Eigen::MatrixXi F_p;
-    const std::string p_path = param_dir + "patch_0_P.obj";
+    const std::string p_path = morph_init_dir + "patch_0_P.obj";
     if (!igl::readOBJ(p_path, P_loaded3, F_p)) {
-        spdlog::error("Cannot read P: {}.  Run Param first.", p_path);
+        spdlog::error("Cannot read P: {}", p_path);
+        spdlog::error("  -> Run Inverse on model '{}' first to produce the OptP-optimized P in MorphInitDir.", model);
         return -1;
     }
+    spdlog::info("P loaded from MorphInitDir: {}", p_path);
     if (P_loaded3.rows() != nV) {
         spdlog::error("P vertex count ({}) does not match V count ({}).", P_loaded3.rows(), nV);
         return -1;
@@ -153,15 +159,14 @@ int main(int /*argc*/, char* /*argv*/[])
         const int i = f.getIndex();
         const double t1 = t1_pf(i);
         const double t2 = t2_pf(i);
-        lam_pf[f] = compute_lamb_d<double>(ac.m_strain_curve, t1, t2);
-        kap_pf[f] = compute_curv_d<double>(ac.m_strain_curve, ac.thickness, t1, t2);
+        lam_pf[f] = compute_lamb_d(ac.m_strain_curve, ac.m_moduls_curve, t1, t2);
+        kap_pf[f] = compute_curv_d(ac.m_strain_curve, ac.m_moduls_curve, ac.thickness, t1, t2, ac.kappa_factor);
     }
 
     // -------- Forward elastic simulation: minimise W(V; lam, kap) over V --------
-    const double E  = 1.0;
     const double nu = 0.5;
     auto simFunc = simulationFunction(geometry, MrInv, lam_pf, kap_pf,
-        E, nu, ac.thickness,
+        ac.m_E_surface, nu, ac.thickness,
         config.RuntimeSetting.w_s, config.RuntimeSetting.w_b,
         ref_faces);
 

@@ -124,7 +124,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
                                     double wM,
                                     double wL,
                                     double theta_anchor,
-                                    double E,
+                                    const M_Surface_LK& E_surface,
                                     double nu,
                                     double h,
                                     double w_s,
@@ -196,7 +196,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap(IntrinsicGeometryInterface& ge
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E_surface,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     // Unified SPN energy = distance + self regulariser + other-variable regulariser (constant in this stage)
@@ -349,7 +349,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
                                   double wM,
                                   double wL,
                                   double theta_anchor,
-                                  double E,
+                                  const M_Surface_LK& E_surface,
                                   double nu,
                                   double h,
                                   double w_s,
@@ -437,7 +437,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam(IntrinsicGeometryInterface& ge
     theta1.fromVector(th);
 
     // IMPORTANT: call the overload with (FaceData<double> lambda, VertexData<double> kappa)
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E_surface, nu, h, w_s, w_b, ref_faces);
 
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
@@ -609,7 +609,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
                                     double wL,
                                     double theta_anchor,
                                     double wP,
-                                    double E,
+                                    const M_Surface_LK& E_surface,
                                     double nu,
                                     double h,
                                     double w_s,
@@ -679,7 +679,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixLam_OptKap_Penalty(IntrinsicGeometryInter
 
   auto distance = [&](const Eigen::VectorXd& th) {
     theta2.fromVector(th);
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E,nu,h,w_s,w_b, ref_faces);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E_surface,nu,h,w_s,w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -840,7 +840,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
                                                           double wL,
                                                           double theta_anchor,
                                                           double wP,
-                                                          double E,
+                                                          const M_Surface_LK& E_surface,
                                                           double nu,
                                                           double h,
                                                           double w_s,
@@ -935,7 +935,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixKap_OptLam_Penalty(IntrinsicGeometryInter
     theta1.fromVector(th);
 
     // IMPORTANT: overload with FaceData<double> lambda
-    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E, nu, h, w_s, w_b, ref_faces);
+    auto simFunc = simulationFunction(geometry, MrInv, theta1, theta2, E_surface, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     double qp = penaltyFunc.eval(th);
@@ -1160,7 +1160,8 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
     double lim,
     double wM_P,
     double wL_P,
-    double E,
+    double min_angle_deg,
+    const M_Surface_LK& E_surface,
     double nu,
     double h,
     double w_s,
@@ -1216,21 +1217,80 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
   // distance lambda: write P, recompute MrInv, run forward Newton, return SPN.
   // Bails out with +inf if any face has non-positive Mr determinant (P
   // degenerate / inverted); this makes lineSearch reject such steps.
+  // Precompute sin(min_angle) threshold once (0 disables the check).
+  const double sin_min_angle = (min_angle_deg > 0.0)
+                                 ? std::sin(min_angle_deg * M_PI / 180.0)
+                                 : 0.0;
+
+  // Helper: smallest sin(angle) over all faces of a packed P (>=0; -1 if any
+  // face is degenerate / has a zero-length edge).
+  auto min_sin_angle_of = [&](const Eigen::VectorXd& Pv) -> double {
+    Eigen::MatrixXd Pm = unpack_P(Pv);
+    double s_min = 1.0;
+    for(int fi = 0; fi < F.rows(); ++fi) {
+      const Eigen::Vector2d p0 = Pm.row(F(fi, 0));
+      const Eigen::Vector2d p1 = Pm.row(F(fi, 1));
+      const Eigen::Vector2d p2 = Pm.row(F(fi, 2));
+      const Eigen::Vector2d e01 = p1 - p0, e02 = p2 - p0, e12 = p2 - p1;
+      const double l0 = e01.norm(), l1 = e12.norm(), l2 = e02.norm();
+      if (l0 < 1e-12 || l1 < 1e-12 || l2 < 1e-12) return -1.0;
+      const double two_area = std::abs(e01.x() * e02.y() - e01.y() * e02.x());
+      s_min = std::min({s_min, two_area / (l0 * l2),
+                        two_area / (l0 * l1), two_area / (l2 * l1)});
+    }
+    return s_min;
+  };
+
+  // Monotone floor: if the STARTING P is already below the configured
+  // min_angle_deg (common for patches whose Parameterize layout has a sliver
+  // just under the cap), clamp the guard floor down to the starting quality.
+  // Otherwise the very first loop eval distance(P_vec) would return +inf,
+  // breaking the Armijo baseline and letting line search accept a garbage
+  // step that collapses P (min_angle -> 0, forward sim diverges to ~1e31).
+  // With this floor the start is accepted and trial steps may not make the
+  // worst triangle any worse than it already is.
+  double eff_sin_min_angle = sin_min_angle;
+  if (sin_min_angle > 0.0) {
+    const double start_sin = min_sin_angle_of(P_vec);
+    if (start_sin >= 0.0 && start_sin < eff_sin_min_angle)
+      eff_sin_min_angle = start_sin;
+  }
   auto distance = [&](const Eigen::VectorXd& Pv) -> double {
     Eigen::MatrixXd Pm = unpack_P(Pv);
-    // Pre-check: every face's Mr = [P1-P0, P2-P0] must have det > 0.
+    // Per-face quality pre-check: (a) det(Mr) > 0 (no foldover),
+    // (b) min angle >= eff_sin_min_angle (monotone floor, see above).
+    // Failing either returns +inf so the Armijo line search backtracks.
     for(int fi = 0; fi < F.rows(); ++fi) {
-      const Eigen::Vector2d e1 = Pm.row(F(fi, 1)) - Pm.row(F(fi, 0));
-      const Eigen::Vector2d e2 = Pm.row(F(fi, 2)) - Pm.row(F(fi, 0));
-      const double det = e1.x() * e2.y() - e1.y() * e2.x();
+      const Eigen::Vector2d p0 = Pm.row(F(fi, 0));
+      const Eigen::Vector2d p1 = Pm.row(F(fi, 1));
+      const Eigen::Vector2d p2 = Pm.row(F(fi, 2));
+      const Eigen::Vector2d e01 = p1 - p0;
+      const Eigen::Vector2d e02 = p2 - p0;
+      const double det = e01.x() * e02.y() - e01.y() * e02.x();
       if (!std::isfinite(det) || det < 1e-10)
         return std::numeric_limits<double>::infinity();
+
+      if (eff_sin_min_angle > 0.0) {
+        const Eigen::Vector2d e12 = p2 - p1;
+        const double l0 = e01.norm(), l1 = e12.norm(), l2 = e02.norm();
+        if (l0 < 1e-12 || l1 < 1e-12 || l2 < 1e-12)
+          return std::numeric_limits<double>::infinity();
+        // 2 * triangle_area = |det|
+        const double two_area = std::abs(det);
+        // sin(angle at v_i) = 2*area / (l_a * l_b) for the two edges incident to v_i
+        const double sin_a0 = two_area / (l0 * l2);   // angle at p0 (between e01, e02)
+        const double sin_a1 = two_area / (l0 * l1);   // angle at p1 (between e10, e12)
+        const double sin_a2 = two_area / (l2 * l1);   // angle at p2 (between e20, e21)
+        const double sin_min = std::min({sin_a0, sin_a1, sin_a2});
+        if (sin_min < eff_sin_min_angle)
+          return std::numeric_limits<double>::infinity();
+      }
     }
     P_io = Pm;
     FaceData<Eigen::Matrix2d> MrInv_curr = precomputeMrInv(
         *dynamic_cast<ManifoldSurfaceMesh*>(&mesh), Pm, F);
     auto simFunc = simulationFunction(geometry, MrInv_curr, lambda_pf, kappa_pf,
-                                      E, nu, h, w_s, w_b, ref_faces);
+                                      E_surface, nu, h, w_s, w_b, ref_faces);
     newton(x, simFunc, adjointSolver, 100, lim, false, fixedIdx);
 
     const Eigen::VectorXd Pd = Pv - P_anchor_vec;
@@ -1289,9 +1349,15 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
          + 2 * wL_P * L_P * Pv;
   };
 
+  // The monotone floor eff_sin_min_angle guarantees the starting P is at or
+  // above the guard floor, so this first eval (and the loop baseline f) is
+  // always finite -- the Armijo line search has a valid reference.
   double energy0 = distance(P_vec);
   std::cout << "Initial SPN energy (OptP): " << energy0
             << "\t distance: " << (x - xTarget).dot(masses.cwiseProduct(x - xTarget)) << std::endl;
+  if (!std::isfinite(energy0))
+    std::cerr << "[OptP] initial P energy is non-finite (foldover det<=0); "
+                 "OptP cannot start from this layout.\n";
 
   LUSolver solver;
 
@@ -1336,15 +1402,32 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
     }
     P_vec += s * deltaP;
 
-    const double _iter_spn  = distance(P_vec);
-    const double _iter_dist = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    // -----------------------------------------------------------------
+    // Two SPN definitions (intentionally distinguished):
+    //   SPN2 (OptP internal): dist + wM_P·||Pd||² + wL_P·||P||²_L + other_reg
+    //                         -- what OptP actually minimises; required for
+    //                            line search and Newton correctness.
+    //   SPN1 (logged):        dist + other_reg
+    //                         -- excludes the OptP-specific P-anchor /
+    //                            P-smoothness regs so the value is on the
+    //                            same basis as OptKap / OptLam (which never
+    //                            see these terms).  This matches the
+    //                            end-of-substage summary written by
+    //                            inverse/main.cpp (spn_energy = distance
+    //                            + kappa_reg + lambda_reg, line ~772), and
+    //                            is what shows up on the convergence curve.
+    // -----------------------------------------------------------------
+    const double _iter_spn_optp_total = distance(P_vec);        // SPN2
+    const double _iter_dist           = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));
+    const Eigen::VectorXd Pd_iter     = P_vec - P_anchor_vec;
+    const double _iter_self_reg       = wM_P * Pd_iter.dot(M_P * Pd_iter)
+                                      + wL_P * P_vec.dot(L_P * P_vec);
+    const double _iter_spn            = _iter_spn_optp_total - _iter_self_reg;  // SPN1
+
     std::cout << "Decrement in iteration " << i << ": " << TinyAD::newton_decrement(deltaP, g)
               << "\tSPN energy: " << _iter_spn
               << "\tDistance: " << _iter_dist
               << "\tStep size: " << s;
-    const Eigen::VectorXd Pd_iter = P_vec - P_anchor_vec;
-    const double _iter_self_reg = wM_P * Pd_iter.dot(M_P * Pd_iter)
-                                + wL_P * P_vec.dot(L_P * P_vec);
     iter_logger(i, x, _iter_spn, _iter_dist, _iter_self_reg, 0.0);
 
     if(TinyAD::newton_decrement(deltaP, g) < lim || solver.info() != Eigen::Success)
@@ -1359,7 +1442,7 @@ Eigen::MatrixXd sparse_gauss_newton_FixMaterial_OptP(
   FaceData<Eigen::Matrix2d> MrInv_final = precomputeMrInv(
       *dynamic_cast<ManifoldSurfaceMesh*>(&mesh), P_io, F);
   auto simFunc_final = simulationFunction(geometry, MrInv_final, lambda_pf, kappa_pf,
-                                          E, nu, h, w_s, w_b, ref_faces);
+                                          E_surface, nu, h, w_s, w_b, ref_faces);
   newton(x, simFunc_final, adjointSolver, 100, lim, false, fixedIdx);
 
   final_distance   = (x - xTarget).dot(masses.cwiseProduct(x - xTarget));

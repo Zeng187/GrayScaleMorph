@@ -19,13 +19,19 @@
 		"wP_kap": [ 0.1 ],
 		"wM_P": [ 1e-6 ],
 		"wL_P": [ 1e-5 ],
-		"wSLIM": [ 1e-4 ],
+		"wSLIM":       [ 0.01 ],
+		"wSLIM_decay": [ 1.0  ],
+		"wSLIM_final": [ 0.01 ],
+		"run_stage_optp": [ true ],
+		"optp_uniform_mass": [ true ],
+		"run_final_optp": [ true ],
+		"min_angle_deg": [ 15.0 ],
 		"penalty_threshold": [ 0.01 ],
-		"betaP": [ 50 ],
+		"betaP": [ 100],
 		"snap_before_P": [ false ],
 		"stage_iter": [ 10 ],
-		"wP_lam_growth_factor": [ 2.0 ],
-		"wP_kap_growth_factor": [ 2.0 ],
+		"wP_lam_growth_factor": [ 1.0 ],
+		"wP_kap_growth_factor": [ 1.0 ],
 		"morph_method": [ "homotopy" ]
 	}
 }

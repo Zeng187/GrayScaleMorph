@@ -7,34 +7,8 @@
 #include <spdlog/spdlog.h>
 #include<Eigen/Core>
 #include <Eigen/Dense>
-#include <igl/opengl/glfw/Viewer.h>   
 
 using json = nlohmann::json;
-
-
-//#define _MATERIAL_CURVE_VIEW_DEBUG_
-
-
-double eval_poly(const Eigen::VectorXd& coeffs, double x) {
-    double res = 0;
-    for (int i = coeffs.size() - 1; i >= 0; i--) {
-        res = res * x + coeffs(i);
-    }
-    return res;
-}
-
-static Eigen::VectorXd polyfit(const Eigen::VectorXd& x_vals, const Eigen::VectorXd& y_vals, int order) {
-    int n = x_vals.size();
-    Eigen::MatrixXd A(n, order + 1);
-
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < order + 1; j++) {
-            A(i, j) = std::pow(x_vals(i), j);
-        }
-    }
-    Eigen::VectorXd coeffs = A.householderQr().solve(y_vals);
-    return coeffs;
-}
 
 
 Grayscale_Material::Grayscale_Material(const std::string& filePath)
@@ -59,6 +33,10 @@ Grayscale_Material::Grayscale_Material(const std::string& filePath)
     youngs_modulus = m["youngs_modulus"].get<std::vector<double>>();
     strech_ratio = m["strech_ratio"].get<std::vector<double>>();
 
+    // Scheme-A calibrated curvature coefficient (optional).
+    // 0.0 sentinel => not provided => fall back to modulus-weighted physics.
+    kappa_factor = m.contains("kappa_factor") ? m["kappa_factor"].get<double>() : 0.0;
+
     assert(youngs_modulus.size() == strech_ratio.size());
     assert(strech_ratio.size() ==count);
     // process
@@ -73,97 +51,23 @@ Grayscale_Material::Grayscale_Material(const std::string& filePath)
 }
 
 
-void plot_curves(igl::opengl::glfw::Viewer& viewer, const Eigen::VectorXd& coefs,
-    double t_min, double t_max, int samples = 200) {
-
-    
-    Eigen::MatrixXd V1(samples, 2), V2(samples, 2);
-
-    double div = (t_max - t_min) / samples;
-    for (int i = 0; i < samples; ++i) {
-
-        double t1 = t_min + div * i;
-        double t2 = t_min + div * (i + 1);
-
-        V1(i, 0) = t1;
-        V1(i, 1) = eval_poly(coefs, t1);
-        //V1(i, 2) = 0;
-
-        V2(i, 0) = t2;
-        V2(i, 1) = eval_poly(coefs, t2);
-        //V2(i, 2) = 0;
-    }
-
-    Eigen::MatrixXd C(samples, 3);
-    C.setZero();
-    viewer.data().add_edges(V1, V2, C);
-
-}
-
-void plot_points(igl::opengl::glfw::Viewer& viewer, const std::vector<double>& x_vals,
-    const std::vector<double>& y_vals) 
-{
-    int samples = x_vals.size();
-    Eigen::MatrixXd V(samples, 2);
-
-    for (int i = 0; i < samples; ++i) {
-        V(i, 0) = x_vals[i];
-        V(i, 1) = y_vals[i];
-        //V(i, 2) = 0;
-    }
-
-    Eigen::MatrixXd C(samples, 3);
-    C.setZero();
-	C.col(0).setOnes();
-    viewer.data().add_points(V, C);
-
-}
-
-
 void Grayscale_Material::ComputeMaterialCurve()
 {
-    if (count <= 1)
-        return;
+    if (count <= 1) return;
 
-	Eigen::VectorXd t_vals_eigen = Eigen::Map<Eigen::VectorXd>(t_vals.data(), t_vals.size());
-	Eigen::VectorXd strech_ratio_eigen = Eigen::Map<Eigen::VectorXd>(strech_ratio.data(), strech_ratio.size());
-	Eigen::VectorXd youngs_modulus_eigen = Eigen::Map<Eigen::VectorXd>(youngs_modulus.data(), youngs_modulus.size());
+    // Natural cubic spline: second derivative = 0 at both endpoints.
+    // Interpolates the 7 measured (t_i, value_i) points exactly.
+    m_strain_curve.curve.set_boundary(
+        tk::spline::second_deriv, 0.0,
+        tk::spline::second_deriv, 0.0);
+    m_strain_curve.curve.set_points(t_vals, strech_ratio, tk::spline::cspline);
 
+    m_moduls_curve.curve.set_boundary(
+        tk::spline::second_deriv, 0.0,
+        tk::spline::second_deriv, 0.0);
+    m_moduls_curve.curve.set_points(t_vals, youngs_modulus, tk::spline::cspline);
 
-	int order_strain_curve = 4;
-	int order_modulus_curve = 4;
-	Eigen::VectorXd poly_coef_lam_eigen = polyfit(t_vals_eigen, strech_ratio_eigen, order_strain_curve);
-	Eigen::VectorXd poly_coef_mod_eigen = polyfit(t_vals_eigen, youngs_modulus_eigen, order_modulus_curve);
-
-	m_strain_curve.order = order_strain_curve + 1;
-	m_strain_curve.coeffs = std::vector<double>(poly_coef_lam_eigen.data(), poly_coef_lam_eigen.data() + poly_coef_lam_eigen.size());
-	m_moduls_curve.order = order_modulus_curve + 1;
-	m_moduls_curve.coeffs = std::vector<double>(poly_coef_mod_eigen.data(), poly_coef_mod_eigen.data() + poly_coef_mod_eigen.size());
-    
-
-	std::cout<< "Material curve polynomial coefficients (stretch ratio): \n";
-	std::cout << poly_coef_lam_eigen.transpose() << std::endl;
-	std::cout << "Material curve polynomial coefficients (Young's modulus): \n";
-	std::cout << poly_coef_mod_eigen.transpose() << std::endl;
-
-#ifdef _MATERIAL_CURVE_VIEW_DEBUG_
-
-    igl::opengl::glfw::Viewer material_curve_viewer;
-    plot_curves(material_curve_viewer,poly_coef_lam_eigen, 0.0, 1.0);
-    plot_points(material_curve_viewer,t_vals, strech_ratio);
-
-    material_curve_viewer.core().is_animating = true;
-    material_curve_viewer.core().orthographic = true;
-    material_curve_viewer.core().trackball_angle = Eigen::Quaternionf::Identity();
-    material_curve_viewer.data().point_size = 5;
-	material_curve_viewer.data().line_width = 2;
-    material_curve_viewer.launch();
-
-#endif
-
-
-
-
+    spdlog::info("Material curves built via natural cubic spline over {} measured points", count);
 }
 
 
@@ -176,9 +80,14 @@ ActiveComposite::ActiveComposite(const std::string& filePath):Grayscale_Material
 
     range_lam = double2{ 1 + strain_min,1 + strain_max };
 
-    double _kappa_ = 1.5 * (strain_max - strain_min) / thickness;
+    // Curvature range uses the calibrated scheme-A factor (kappa = factor*(s1-s2)/h);
+    // fall back to the legacy 1.5 coefficient when no kappa_factor is provided.
+    const double kfac = (kappa_factor != 0.0) ? kappa_factor : 1.5;
+    double _kappa_ = kfac * (strain_max - strain_min) / thickness;
 
     range_kap = double2{ -_kappa_, _kappa_};
+
+    LoadEsurface(filePath);
 }
 
 
@@ -198,8 +107,8 @@ void ActiveComposite::ComputeFeasibleVals()
             double t1 = (double) i /(double)(count -1);
             double t2 = (double) j /(double)(count -1);
 
-            double lam = compute_lamb_d(m_strain_curve,t1,t2);
-            double kap = compute_curv_d(m_strain_curve,thickness,t1,t2);
+            double lam = compute_lamb_d(m_strain_curve, m_moduls_curve, t1, t2);
+            double kap = compute_curv_d(m_strain_curve, m_moduls_curve, thickness, t1, t2, kappa_factor);
             double mol = compute_modu_d(m_moduls_curve,t1,t2);
 
             feasible_t_vals[id]=std::pair<double,double>(t1,t2);
@@ -209,4 +118,84 @@ void ActiveComposite::ComputeFeasibleVals()
         }
     }
 
+}
+
+
+void ActiveComposite::LoadEsurface(const std::string& filePath)
+{
+    // filePath is the raw material JSON (e.g. ".../grayscale-material.json").
+    // The TPS surface lives next to it as
+    //   ".../grayscale-material-modulus_surface_tps.json".
+    std::filesystem::path raw_path(filePath);
+    auto stem = raw_path.stem().string();
+    auto surface_path =
+        (raw_path.parent_path() / (stem + "-modulus_surface_tps.json")).string();
+
+    auto install_identity_fallback = [&]() {
+        // Identity TPS: no radial basis terms, affine = [1, 0, 0] -> E == 1.
+        m_E_surface.anchors_lambda_hat.clear();
+        m_E_surface.anchors_kappa_sq_hat.clear();
+        m_E_surface.tps_weights = std::vector<double>{1.0, 0.0, 0.0};
+        m_E_surface.lambda_mid = 0.0;
+        m_E_surface.lambda_half_range = 1.0;
+        m_E_surface.kappa_sq_max = 1.0;
+        m_E_surface.loaded = false;
+    };
+
+    std::ifstream sfile(surface_path);
+    if (!sfile.is_open()) {
+        spdlog::warn("E(lambda, kappa) TPS surface NOT found: {} -- falling back to identity E=1",
+                     surface_path);
+        install_identity_fallback();
+        return;
+    }
+
+    json sj;
+    sfile >> sj;
+
+    try {
+        auto& norm = sj["normalization"];
+        m_E_surface.lambda_mid        = norm["lambda_mid"].get<double>();
+        m_E_surface.lambda_half_range = norm["lambda_half_range"].get<double>();
+        m_E_surface.kappa_sq_max      = norm["kappa_sq_max"].get<double>();
+
+        m_E_surface.anchors_lambda_hat   = sj["anchors_lambda_hat"].get<std::vector<double>>();
+        m_E_surface.anchors_kappa_sq_hat = sj["anchors_kappa_sq_hat"].get<std::vector<double>>();
+        m_E_surface.tps_weights          = sj["tps_weights"].get<std::vector<double>>();
+
+        const int N = static_cast<int>(m_E_surface.anchors_lambda_hat.size());
+        const int expected_N = sj.contains("anchor_count")
+            ? sj["anchor_count"].get<int>()
+            : N;
+
+        if (static_cast<int>(m_E_surface.anchors_kappa_sq_hat.size()) != N ||
+            N != expected_N) {
+            spdlog::error("modulus_surface_tps.json: anchor arrays inconsistent "
+                          "(lambda_hat={}, kappa_sq_hat={}, anchor_count={})",
+                          N,
+                          (int)m_E_surface.anchors_kappa_sq_hat.size(),
+                          expected_N);
+            exit(1);
+        }
+        if (static_cast<int>(m_E_surface.tps_weights.size()) != N + 3) {
+            spdlog::error("modulus_surface_tps.json: tps_weights size {} != N+3 = {}",
+                          (int)m_E_surface.tps_weights.size(), N + 3);
+            exit(1);
+        }
+
+        m_E_surface.loaded = true;
+
+        // Sanity log: evaluate at (lambda = lambda_mid, kappa = 0) so lh=0, ksh=0.
+        // The radial basis at the centre is non-zero (sum of phi(||p_k||) terms),
+        // so this exercises the real evaluator path rather than just the affine bias.
+        const double E_center = compute_E_lk<double>(
+            m_E_surface, m_E_surface.lambda_mid, 0.0);
+        spdlog::info("Loaded E(lambda, kappa) TPS surface from {} (N={} anchors, "
+                     "E at lambda_mid,kappa=0 = {} MPa)",
+                     surface_path, N, E_center);
+    } catch (const std::exception& ex) {
+        spdlog::error("modulus_surface_tps.json: parse error: {} -- falling back to identity E=1",
+                      ex.what());
+        install_identity_fallback();
+    }
 }
