@@ -1,7 +1,7 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "beetle3" ],
+		"ModelName":    [ "foot_brace4" ],
 		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
@@ -28,8 +28,8 @@
 		"min_angle_deg": [ 15.0 ],
 		"penalty_threshold": [ 0.01 ],
 		"betaP": [ 100],
-		"snap_before_P": [ false ],
-		"stage_iter": [ 10 ],
+		"snap_before_P": [ true ],
+		"stage_iter": [ 5 ],
 		"wP_lam_growth_factor": [ 1.0 ],
 		"wP_kap_growth_factor": [ 1.0 ],
 		"morph_method": [ "homotopy" ]

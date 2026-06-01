@@ -432,6 +432,47 @@ int main(int /*argc*/, char * /*argv*/[])
         return {min_angle_rad * 180.0 / M_PI, max_aspect};
     };
 
+    // P-anchor + P-smoothness regulariser, evaluated on a given P layout.
+    // Matches the OptP-internal term exactly:
+    //   wM_P*||P - P_anchor||^2_{M_P} + wL_P*||P||^2_{L_P}
+    // (newton.cpp:1300-1301).  P_anchor / M_P_2 / L_P_2 are defined below in
+    // the same scope; this lambda is only invoked after they exist.
+    auto computePReg = [&](const Eigen::MatrixXd& P_cur) -> double {
+        const double wM_P = config.RuntimeSetting.wM_P;
+        const double wL_P = config.RuntimeSetting.wL_P;
+        Eigen::VectorXd Pv(2 * nV), Pa(2 * nV);
+        for (size_t v = 0; v < nV; ++v) {
+            Pv(2 * v + 0) = P_cur(v, 0);  Pv(2 * v + 1) = P_cur(v, 1);
+            Pa(2 * v + 0) = P_anchor(v, 0); Pa(2 * v + 1) = P_anchor(v, 1);
+        }
+        const Eigen::VectorXd Pd = Pv - Pa;
+        return wM_P * Pd.dot(M_P_2 * Pd) + wL_P * Pv.dot(L_P_2 * Pv);
+    };
+
+    // SLIM symmetric-Dirichlet barrier on P, evaluated on a given P layout at
+    // a given weight.  Per-face E = tr(J^TJ) + tr((J^TJ)^{-1}), J = Mr(P)*MrInv_anchor,
+    // area-weighted by the anchor; sum * w_slim.  Mirrors functions.cpp:1257-1287
+    // so the logged value equals the barrier contribution inside OptP's SPN2.
+    auto computeSlim = [&](const Eigen::MatrixXd& P_cur, double w_slim) -> double {
+        if (w_slim <= 0.0) return 0.0;
+        double total = 0.0;
+        for (int fi = 0; fi < F.rows(); ++fi) {
+            const int v0 = F(fi, 0), v1 = F(fi, 1), v2 = F(fi, 2);
+            Eigen::Matrix2d Mr;
+            Mr << P_cur(v1, 0) - P_cur(v0, 0), P_cur(v2, 0) - P_cur(v0, 0),
+                  P_cur(v1, 1) - P_cur(v0, 1), P_cur(v2, 1) - P_cur(v0, 1);
+            const Eigen::Matrix2d MrI_a = MrInv_anchor[fi];
+            const Eigen::Matrix2d J = Mr * MrI_a;
+            const double A2   = (J.transpose() * J).trace();
+            const double detJ = J.determinant();
+            if (std::abs(detJ) < 1e-300) return std::numeric_limits<double>::infinity();
+            const double Esym = A2 + A2 / (detJ * detJ);
+            const double dA_a = 0.5 / MrI_a.determinant();
+            total += Esym * dA_a;
+        }
+        return w_slim * total;
+    };
+
     // Per-vertex Euclidean RMS distance, binned by ncontact class.
     // Returns 4 values in physical units:
     //   [0] class_1_rms  (interior, ncontact == 1)
@@ -564,8 +605,61 @@ int main(int /*argc*/, char * /*argv*/[])
                  << "kappa_reg,lambda_reg,penalty_kap,penalty_lam,"
                  << "wP_kap,wP_lam,wM_kap,wL_kap,wM_lam,wL_lam,"
                  << "class_1_mean,class_1_max,class_1_rms,class_2_mean,class_2_max,class_2_rms,"
-                    "class_3_mean,class_3_max,class_3_rms,class_4_mean,class_4_max,class_4_rms,wSLIM\n";
+                    "class_3_mean,class_3_max,class_3_rms,class_4_mean,class_4_max,class_4_rms,wSLIM,p_reg,slim\n";
     spdlog::info("Iter log -> {}", morphlogs_dir + "iter_log.csv");
+
+    // ---- g00 baseline row (x-axis origin for convergence plots) -----------
+    // Before any optimisation, evaluate the "do-nothing" manufacturable design:
+    // every face dosed g00 (t1=t2=0).  This is the uniform-material reference
+    // the optimiser starts from -- its SPN / distance / projected distance are
+    // the worst-case anchors that the convergence curves descend from.
+    // For t1=t2 the curvature kappa = kappa_factor*(s(0)-s(0)) = 0 (flat), and
+    // lambda is the uniform g00 in-plane factor; the forward sim from the flat
+    // plate yields the g00 equilibrium shape.  proj_dist == dist here because
+    // g00 is already an exact feasible (manufacturable) material.
+    {
+        const double lam_g00 = compute_lamb_d(ac.m_strain_curve, ac.m_moduls_curve, 0.0, 0.0);
+        const double kap_g00 = compute_curv_d(ac.m_strain_curve, ac.m_moduls_curve,
+                                              ac.thickness, 0.0, 0.0, ac.kappa_factor);
+        FaceData<double> lambda_g00(mesh, lam_g00);
+        FaceData<double> kappa_g00(mesh, kap_g00);
+        auto simFunc_g00 = simulationFunction(geometry, MrInv, lambda_g00, kappa_g00,
+            ac.m_E_surface, nu, ac.thickness,
+            config.RuntimeSetting.w_s, config.RuntimeSetting.w_b, ref_faces);
+        Eigen::MatrixXd Vr_g00 = Vr;   // start from the flat-plate init
+        newton(geometry, Vr_g00, simFunc_g00,
+               config.RuntimeSetting.MaxIter, config.RuntimeSetting.epsilon, false, fixedIdx);
+        double dist_g00 = 0.0;
+        for (size_t i = 0; i < nV; ++i)
+            for (int j = 0; j < 3; ++j) {
+                double d = Vr_g00(i, j) - targetV(i, j);
+                dist_g00 += masses(3 * i + j) * d * d;
+            }
+        // Regularisers evaluated on the uniform g00 (lambda,kappa) field.
+        const Eigen::VectorXd kg = kappa_g00.toVector();
+        const Eigen::VectorXd kgo = kg - Eigen::VectorXd::Constant(kg.size(), kappa_anchor);
+        const double kreg_g00 = wM_kap * kgo.dot(M_kappa * kgo) + wL_kap * kg.dot(L_face * kg);
+        const Eigen::VectorXd lg = lambda_g00.toVector();
+        const Eigen::VectorXd lgo = lg - Eigen::VectorXd::Constant(lg.size(), lambda_anchor);
+        const double lreg_g00 = wM_lam * lgo.dot(M_lambda * lgo) + wL_lam * lg.dot(L_face * lg);
+        const double spn_g00 = dist_g00 + kreg_g00 + lreg_g00;
+        const double pen_kap_g00 = penalty_to_kapp.eval(kg);
+        const double pen_lam_g00 = penalty_to_lamb.eval(lg);
+        const auto cls_g00 = computeClassRMS(Vr_g00);
+        // P is still the initial Param P here, so p_reg=0 (P==P_anchor) and SLIM
+        // is the barrier on the un-optimised P at the starting wSLIM.
+        const double p_reg_g00 = 0.0;
+        spdlog::info("g00 baseline: lam={:.5f} kap={:.5f} dist={:.6f} spn={:.6f}",
+                     lam_g00, kap_g00, dist_g00, spn_g00);
+        iter_log_ofs << "-2,Baseline,0,"
+                     << spn_g00 << "," << dist_g00 << "," << dist_g00 << ","
+                     << kreg_g00 << "," << lreg_g00 << ","
+                     << pen_kap_g00 << "," << pen_lam_g00 << ","
+                     << wP_kap << "," << wP_lam << ","
+                     << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
+                     << clsCsv(cls_g00) << "," << wSLIM << "," << p_reg_g00 << ",0\n";
+        igl::writeOBJ(morph_dir + patch_prefix + "g00.obj", Vr_g00, F);
+    }
 
     // Helper to reshape SGN's flat 3*nV x vector back to nV x 3 V matrix.
     auto reshape_x_to_V = [&](const Eigen::VectorXd& x_vec) {
@@ -608,7 +702,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << self_reg_iter << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << ",0,0\n";
         };
         Vr = sparse_gauss_newton_FixLam_OptKap_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, lambda_reg,
                                                        adjointFunc_OptKap, penalty_to_kapp, fixedIdx,
@@ -631,7 +725,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << ",0,0\n";
         }
 
         printStageStats();
@@ -654,7 +748,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << self_reg_iter << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << ",0,0\n";
         };
         Vr = sparse_gauss_newton_FixKap_OptLam_Penalty(geometry, targetV, Vr, MrInv, lambda_pf_s, kappa_pf_s, masses, kappa_reg,
                                                        adjointFunc_OptLam, penalty_to_lamb, fixedIdx,
@@ -677,7 +771,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << ",0,0\n";
         }
 
         printStageStats();
@@ -740,13 +834,15 @@ int main(int /*argc*/, char * /*argv*/[])
                 const auto cls_rms = computeClassRMS(_proj_st.V);
                 const double pen_kap = penalty_to_kapp.eval(kappa_pf_s.toVector());
                 const double pen_lam = penalty_to_lamb.eval(lambda_pf_s.toVector());
+                const double p_reg = computePReg(P);
+                const double slim  = computeSlim(P, wSLIM);
                 std::cout << "\tproj=" << pd << "\t" << clsStr(cls_rms) << std::endl;
                 iter_log_ofs << k << ",OptP," << i << ","
                              << spn << "," << dist << "," << pd << ","
                              << kappa_reg << "," << lambda_reg << ","
                              << pen_kap << "," << pen_lam << ","
                              << wP_kap << "," << wP_lam << ","
-                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                             << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "," << p_reg << "," << slim << "\n";
             };
 
             double P_reg = 0.0;
@@ -791,7 +887,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM << "," << computePReg(P) << "," << computeSlim(P, wSLIM) << "\n";
         }
         }   // end if (run_stage_optp)
         // -------------------------------------------------------------------
@@ -947,7 +1043,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << kappa_reg << "," << lambda_reg << ","
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
-                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM_final << "\n";
+                         << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << "," << clsCsv(cls_rms) << "," << wSLIM_final << "," << computePReg(P) << "," << computeSlim(P, wSLIM_final) << "\n";
         };
 
         double dummy_dist = 0, dummy_spn = 0, dummy_reg = 0;
@@ -989,7 +1085,7 @@ int main(int /*argc*/, char * /*argv*/[])
                          << pen_kap << "," << pen_lam << ","
                          << wP_kap << "," << wP_lam << ","
                          << wM_kap << "," << wL_kap << "," << wM_lam << "," << wL_lam << ","
-                         << clsCsv(cls_rms) << "," << wSLIM_final << "\n";
+                         << clsCsv(cls_rms) << "," << wSLIM_final << "," << computePReg(P) << "," << computeSlim(P, wSLIM_final) << "\n";
         }
         std::cout << "[Final SNAP OptP done] dist=" << dummy_dist << "\n";
     }

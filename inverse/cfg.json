@@ -1,7 +1,7 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "hemisphere_proj" ],
+		"ModelName":    [ "peanut" ],
 		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
@@ -26,10 +26,10 @@
 		"optp_uniform_mass": [ true ],
 		"run_final_optp": [ true ],
 		"min_angle_deg": [ 15.0],
-		"penalty_threshold": [ 0.01 ],
-		"betaP": [ 50 ],
-		"snap_before_P": [ false ],
-		"stage_iter": [ 10 ],
+		"penalty_threshold": [ 0.1 ],
+		"betaP": [ 100 ],
+		"snap_before_P": [ true ],
+		"stage_iter": [ 5],
 		"wP_lam_growth_factor": [ 1.0 ],
 		"wP_kap_growth_factor": [ 1.0 ],
 		"patch_id": [ 0 ],

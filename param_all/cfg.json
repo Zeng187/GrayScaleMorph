@@ -1,7 +1,7 @@
 {
 	"PathConfig": [ "../../Resources/0_setup/path.json" ],
 	"Model": {
-		"ModelName":    [ "foot_brace4" ],
+		"ModelName":    [ "beetle3" ],
 		"MaterialName": [ "grayscale-material" ],
 		"Postfix":      [ ".obj" ]
 	},
